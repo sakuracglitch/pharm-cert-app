@@ -1,4 +1,4 @@
-const APP_VERSION='1.13.0';
+const APP_VERSION='1.16.0';
 const SCHEMA_VERSION=9;
 const LEGACY_STORAGE_KEY='pharm-cert-pwa-data';
 const DB_NAME='pharm-cert-pwa';
@@ -161,6 +161,88 @@ function allCredits(){return state.trainings.flatMap(t=>(t.creditEntries||[]).ma
 function isCreditEligibleForHospital(c,appYear=targetApplicationYear(HOSPITAL_CERT)){return targetFiscalYears(appYear,HOSPITAL_CERT).includes(fy(c.date))}
 function recommendAllocation(c){return isCreditEligibleForHospital(c)?HOSPITAL_CERT.id:'unassigned'}
 function allocationFor(c){return state.confirmedAllocations[c.creditId]||state.manualAllocations[c.creditId]||recommendAllocation(c)}
+function hospitalAllocationSnapshot(credits,years=targetFiscalYears(targetApplicationYear(HOSPITAL_CERT),HOSPITAL_CERT)){
+  const cs=[...credits];
+  const total=cs.reduce((s,c)=>s+Number(c.unit||0),0);
+  const yearly=Object.fromEntries(years.map(y=>[y,cs.filter(c=>fy(c.date)===y).reduce((s,c)=>s+Number(c.unit||0),0)]));
+  const domains={};
+  for(const [d,req] of Object.entries(HOSPITAL_CERT.domains)){
+    const dcs=cs.filter(c=>c.domain===d),codes=new Set(dcs.map(c=>c.code));
+    domains[d]={units:dcs.reduce((s,c)=>s+Number(c.unit||0),0),items:codes.size,codes,req};
+  }
+  const mandatoryMissing=[];
+  for(const d of ['III','IV','V']){
+    const group=CURRICULUM.find(g=>g.domain===d);
+    for(const [code] of group?.items||[])if(!domains[d]?.codes?.has(code))mandatoryMissing.push(code);
+  }
+  const domainItemDeficit=Object.entries(HOSPITAL_CERT.domains).reduce((s,[d,req])=>s+Math.max(0,Number(req.items||0)-Number(domains[d]?.items||0)),0);
+  const domainUnitDeficit=Object.entries(HOSPITAL_CERT.domains).reduce((s,[d,req])=>s+Math.max(0,Number(req.units||0)-Number(domains[d]?.units||0)),0);
+  const annualDeficit=years.reduce((s,y)=>s+Math.max(0,HOSPITAL_CERT.annualRequired-Number(yearly[y]||0)),0);
+  const totalDeficit=Math.max(0,HOSPITAL_CERT.totalRequired-total);
+  const externalUsed=cs.filter(c=>c.source!=='jshp'&&c.cpc).reduce((s,c)=>s+Number(c.unit||0),0);
+  const meets=mandatoryMissing.length===0&&domainItemDeficit<=1e-9&&domainUnitDeficit<=1e-9&&annualDeficit<=1e-9&&totalDeficit<=1e-9&&externalUsed<=HOSPITAL_CERT.externalMax+1e-9;
+  return {total,yearly,domains,mandatoryMissing,domainItemDeficit,domainUnitDeficit,annualDeficit,totalDeficit,externalUsed,meets};
+}
+function hospitalAllocationImprovement(before,after){
+  return [
+    before.mandatoryMissing.length-after.mandatoryMissing.length,
+    before.domainItemDeficit-after.domainItemDeficit,
+    before.domainUnitDeficit-after.domainUnitDeficit,
+    before.annualDeficit-after.annualDeficit,
+    before.totalDeficit-after.totalDeficit
+  ];
+}
+function compareImprovement(a,b){for(let i=0;i<a.length;i++){if(Math.abs(a[i]-b[i])>1e-9)return a[i]-b[i]}return 0}
+function simulateHospitalAllocation(){
+  const years=targetFiscalYears(targetApplicationYear(HOSPITAL_CERT),HOSPITAL_CERT);
+  const all=allCredits().filter(c=>years.includes(fy(c.date)));
+  const fixed=all.filter(c=>state.confirmedAllocations[c.creditId]===HOSPITAL_CERT.id);
+  const fixedIds=new Set(fixed.map(c=>c.creditId));
+  const selected=[...fixed];
+  const selectedIds=new Set(selected.map(c=>c.creditId));
+  const candidates=all.filter(c=>!fixedIds.has(c.creditId)&&(c.source==='jshp'||c.cpc));
+  const canAdd=c=>{
+    if(selectedIds.has(c.creditId))return false;
+    if(c.source!=='jshp'&&!c.cpc)return false;
+    if(c.source!=='jshp'&&c.cpc){
+      const ext=selected.filter(x=>x.source!=='jshp'&&x.cpc).reduce((s,x)=>s+Number(x.unit||0),0);
+      if(ext+Number(c.unit||0)>HOSPITAL_CERT.externalMax+1e-9)return false;
+    }
+    return true;
+  };
+  let safety=0;
+  while(safety++<10000){
+    const before=hospitalAllocationSnapshot(selected,years);
+    if(before.meets)break;
+    let best=null,bestImp=null;
+    for(const c of candidates){
+      if(!canAdd(c))continue;
+      const after=hospitalAllocationSnapshot([...selected,c],years);
+      const imp=hospitalAllocationImprovement(before,after);
+      if(!imp.some(v=>v>1e-9))continue;
+      if(!best){best=c;bestImp=imp;continue}
+      const cmp=compareImprovement(imp,bestImp);
+      if(cmp>0||(cmp===0&&(c.date<best.date||(c.date===best.date&&String(c.creditId)<String(best.creditId))))){best=c;bestImp=imp}
+    }
+    if(!best)break;
+    selected.push(best);selectedIds.add(best.creditId);
+  }
+  // Once every requirement is met, remove redundant non-confirmed credits. Newer credits are removed first so older/earlier-expiring credits remain preferred.
+  if(hospitalAllocationSnapshot(selected,years).meets){
+    const removable=selected.filter(c=>!fixedIds.has(c.creditId)).sort((a,b)=>b.date.localeCompare(a.date)||Number(b.unit||0)-Number(a.unit||0)||String(b.creditId).localeCompare(String(a.creditId)));
+    for(const c of removable){
+      const trial=selected.filter(x=>x.creditId!==c.creditId);
+      if(hospitalAllocationSnapshot(trial,years).meets){
+        const idx=selected.findIndex(x=>x.creditId===c.creditId);if(idx>=0)selected.splice(idx,1);selectedIds.delete(c.creditId)
+      }
+    }
+  }
+  const selectedSet=new Set(selected.map(c=>c.creditId));
+  const assignedUnits=selected.reduce((s,c)=>s+Number(c.unit||0),0);
+  const unassignedCredits=all.filter(c=>!selectedSet.has(c.creditId));
+  const unassignedUnits=unassignedCredits.reduce((s,c)=>s+Number(c.unit||0),0);
+  return {years,all,selected,selectedSet,assignedUnits,unassignedCredits,unassignedUnits,met:hospitalAllocationSnapshot(selected,years).meets};
+}
 function creditsForHospital(){const years=targetFiscalYears(targetApplicationYear(HOSPITAL_CERT),HOSPITAL_CERT);return allCredits().filter(c=>years.includes(fy(c.date))&&(state.confirmedAllocations[c.creditId]===HOSPITAL_CERT.id||state.manualAllocations[c.creditId]===HOSPITAL_CERT.id||(!state.confirmedAllocations[c.creditId]&&!state.manualAllocations[c.creditId]&&recommendAllocation(c)===HOSPITAL_CERT.id)))}
 function hospitalStats(){
   const appYear=targetApplicationYear(HOSPITAL_CERT),years=targetFiscalYears(appYear,HOSPITAL_CERT);let cs=creditsForHospital();
@@ -206,7 +288,7 @@ function renderHome(){const q=currentQualification();if(!isHospitalQualification
     ${s.mandatory.length?`<div class="mandatory-list"><div class="mandatory-title">必須未取得</div>${s.mandatory.map(x=>`<div class="mandatory-item"><span>${x.code} ${esc(x.name)}</span><strong>${fmt(s.itemTotals[x.code]||0)}単位</strong></div>`).join('')}</div>`:''}
   </div>
 </section>
-<section class="card simulation-mini"><div class="row between"><div><div class="section-title" style="margin:0">配分シミュレーション</div><div class="small">現在の単位から自動シミュレーション</div></div><button class="text-link" onclick="go('allocation')">詳細 ${ICONS.chevron}</button></div><div class="sim-lines"><div><span>病院薬学認定</span><strong>${fmt(s.total)}単位</strong></div><div><span>未割当</span><strong>${fmt(allCredits().filter(c=>allocationFor(c)==='unassigned').reduce((a,c)=>a+c.unit,0))}単位</strong></div>${s.expSoon?`<div class="warn-line"><span>${s.years[0]}年度分</span><strong>${fmt(s.expSoon)}単位</strong><small>次年度は対象外</small></div>`:''}</div></section>
+<section class="card simulation-mini"><div class="row between"><div><div class="section-title" style="margin:0">配分シミュレーション</div></div><button class="text-link" onclick="go('allocation')">詳細 ${ICONS.chevron}</button></div>${(()=>{const a=simulateHospitalAllocation();return `<div class="sim-lines"><div><span>病院薬学認定</span><strong>${fmt(a.assignedUnits)}単位</strong></div><div><span>未割当</span><strong>${fmt(a.unassignedUnits)}単位</strong></div></div>`})()}</section>
 <section class="card schedule-card"><div class="section-title">申請・試験</div><div class="metric"><span>次回申請日程</span><strong>未発表</strong></div><div class="metric"><span>試験日</span><strong>未発表</strong></div><div class="small">公式情報が発表されたら資格テンプレート側を更新する想定です。</div></section>
 <section class="card requirements-compact"><button class="requirements-toggle" onclick="requirementsOpen=!requirementsOpen;render()"><span>認定要件を確認</span><span class="chev ${requirementsOpen?'open':''}">${ICONS.chevron}</span></button>${requirementsOpen?`<div class="requirements-body"><div>過去3年度 合計50単位以上</div><div>各年度10単位以上</div><div>Ⅰ：1項目以上・2単位以上</div><div>Ⅱ：2項目以上・4単位以上</div><div>Ⅲ：全2項目・4単位以上</div><div>Ⅳ：全2項目・4単位以上</div><div>Ⅴ：全3項目・6単位以上</div><div>日病薬以外の対象単位 最大10単位</div></div>`:''}</section>`}
 function renderCustomQualificationHome(q){const reqs=Object.entries(q.requirementTypes||{}).filter(([,v])=>v);return `<section class="compact-target"><div><span class="muted-label">TARGET</span><strong>${esc(q.name)}</strong></div><div class="target-year">要件未設定</div></section><section class="card shortage-card"><div class="kicker">NOW</div><h2>現在の不足</h2><div class="notice">この資格の公式テンプレートを追加すると、ここに単位・実務経験・症例・論文・学会発表などの不足だけを表示します。</div></section><section class="card"><div class="section-title">管理する要件</div>${reqs.map(([k])=>`<div class="metric"><span>${requirementLabel(k)}</span><strong>未設定</strong></div>`).join('')}</section>`}
@@ -244,7 +326,7 @@ function renderHistoryTimeline(){
   const ts=[...state.trainings].sort((a,b)=>b.date.localeCompare(a.date));
   return ts.length?ts.map(t=>{
     const g=groupTrainingCredits(t);
-    return `<section class="card history-card editable-history-card" role="button" tabindex="0" aria-label="${esc(t.name)}を編集" onclick="editTraining('${t.id}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();editTraining('${t.id}')}"><div class="history-date">${esc(t.date)} ・ ${fy(t.date)}年度</div><div class="history-title">${esc(t.name)}</div><div class="credit-tags">${Object.entries(g).map(([c,v])=>`<span class="credit-tag">${c} ${fmt(v.unit)}単位${v.count>1?`・${v.count}件`:''}</span>`).join('')}</div><div class="small" style="margin-top:10px">計 ${fmt(trainingTotal(t))}単位・${(t.creditEntries||[]).length}明細</div></section>`
+    return `<section class="card history-card editable-history-card" role="button" tabindex="0" aria-label="${esc(t.name)}を編集" onclick="editTraining('${t.id}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();editTraining('${t.id}')}"><div class="history-date">${esc(t.date)} ・ ${fy(t.date)}年度</div><div class="history-title">${esc(t.name)}</div><div class="credit-tags">${Object.entries(g).map(([c,v])=>`<span class="credit-tag">${c} ${fmt(v.unit)}単位${v.count>1?`・${v.count}件`:''}</span>`).join('')}</div><div class="small" style="margin-top:10px">計 ${fmt(trainingTotal(t))}単位</div></section>`
   }).join(''):'<section class="card empty">まだ記録がありません。</section>'
 }
 function trainingCodeEntries(t,code){return (t.creditEntries||[]).filter(e=>e.code===code)}
@@ -262,7 +344,13 @@ function closeMatrixRequirement(){matrixRequirementDomain='';render()}
 function renderMatrixRequirementModal(){const info=matrixRequirementStats(matrixRequirementDomain);if(!info){matrixRequirementDomain='';return ''}return `<div class="modal-back matrix-req-back" onclick="if(event.target===this)closeMatrixRequirement()"><section class="modal matrix-req-sheet" onclick="event.stopPropagation()"><div class="sheet-grab"></div><div class="matrix-req-top"><div class="matrix-req-icon">${ICONS.file}</div><div><div class="kicker">REQUIREMENT</div><h3>${info.domain}領域の認定要件</h3><div class="small">${esc(info.group.title)}</div></div><button class="close-x" onclick="closeMatrixRequirement()">×</button></div><div class="matrix-req-grid"><div><span>必須項目</span><strong>${info.itemRule}</strong></div><div><span>必須単位</span><strong>${fmt(info.req.units)}単位以上</strong></div><div><span>現在</span><strong>${info.current.items}項目 / ${fmt(info.current.units)}単位</strong></div><div><span>あと</span><strong class="accent">${info.remainText}</strong></div></div><div class="matrix-req-tags">${info.group.items.map(([code,name])=>`<span>${code} ${esc(name)}</span>`).join('')}</div></section></div>`}
 function renderMatrixDetailModal(){const t=state.trainings.find(x=>x.id===matrixDetail.trainingId);if(!t){matrixDetail=null;return ''}const code=matrixDetail.code,entries=trainingCodeEntries(t,code),total=entries.reduce((sum,e)=>sum+Number(e.unit||0),0);const breakdown=entries.length>1?`<div class="matrix-detail-list">${entries.map(e=>`<div class="matrix-detail-row"><div><strong>${fmt(e.unit)}単位</strong>${e.title?`<span>${esc(e.title)}</span>`:''}</div><small>${e.sourcePage?`PDF ${e.sourcePage}ページ`:''}${e.sourceOrder?`${e.sourcePage?' ・ ':''}掲載順 ${e.sourceOrder}`:''}</small></div>`).join('')}</div>`:'';return `<div class="modal-back" onclick="if(event.target===this)closeMatrixDetail()"><section class="modal matrix-detail-modal"><div class="row between"><div><div class="kicker">DETAIL</div><h3>${code} ${esc(curriculumName(code))}</h3></div><button class="close-x" onclick="closeMatrixDetail()">×</button></div><div class="matrix-detail-training"><strong>${esc(t.name)}</strong><span>${esc(t.date)} ・ ${fy(t.date)}年度</span></div><div class="matrix-detail-unit-only"><strong>${fmt(total)}単位</strong></div>${breakdown}</section></div>`}
 
-function renderAllocation(){if(!isHospitalQualification())return `<section class="card"><div class="notice">この資格の配分ルールは未設定です。</div></section>`;const cs=allCredits().sort((a,b)=>a.date.localeCompare(b.date)),s=hospitalStats();return `<section class="card"><div class="section-title">配分シミュレーション</div><div class="sim-lines large"><div><span>病院薬学認定</span><strong>${fmt(s.total)}単位</strong></div><div><span>未割当</span><strong>${fmt(cs.filter(c=>allocationFor(c)==='unassigned').reduce((a,c)=>a+c.unit,0))}単位</strong></div></div><div class="notice" style="margin-top:12px">確定済みは固定し、それ以外を対象期間・不足状況に合わせて仮配分します。これは申請前のシミュレーションです。</div><button class="btn ghost block" style="margin-top:10px" onclick="resetRecommendations()">おすすめ配分に戻す</button></section><section class="card"><div class="section-title">配分一覧</div>${cs.length?cs.map(renderAllocRow).join(''):'<div class="empty">配分できる単位がありません。</div>'}</section>${cs.length?'<section class="card"><button class="btn accent block" onclick="confirmAllHospital()">病院薬学認定への配分を一括確定</button></section>':''}`}
+function renderAllocation(){
+  const sim=simulateHospitalAllocation();
+  const required=HOSPITAL_CERT.totalRequired;
+  const rows=[...sim.all].sort((a,b)=>a.date.localeCompare(b.date)||(a.sourceOrder||0)-(b.sourceOrder||0)||a.name.localeCompare(b.name));
+  return `<section class="card allocation-overview"><div class="section-title">配分シミュレーション</div><div class="single-alloc-summary"><div class="primary"><span>病院薬学認定</span><strong>${fmt(sim.assignedUnits)} / ${fmt(required)}単位</strong></div><div><span>未割当</span><strong>${fmt(sim.unassignedUnits)}単位</strong></div></div><div class="alloc-auto-note">目標資格が1つの間は、取得単位のうち認定要件に必要な組み合わせをおすすめ配分します。要件を満たしたあとに余る単位は未割当に残します。</div></section><section class="card single-alloc-list"><div class="section-title">配分一覧</div>${rows.map(r=>{const assigned=sim.selectedSet.has(r.creditId);return `<div class="single-alloc-row"><div class="single-alloc-main"><strong>${esc(r.code)} ${esc(itemName(r.code))}　${fmt(r.unit)}単位</strong><span>${esc(r.date)}　${esc(r.name)}</span></div><span class="single-alloc-status ${assigned?'':'unassigned'}">${assigned?'病院薬学認定':'未割当'}</span></div>`}).join('')}</section><section class="card alloc-excess-card"><div class="section-title">未割当について</div><div class="small">確定済みの配分は固定し、必須項目・領域要件・年度10単位・総50単位の順に必要な単位を確保します。同条件なら古い単位を優先し、日病薬以外の単位は上限10単位以内で使います。</div></section>`
+}
+
 function renderAllocRow(c){const confirmed=state.confirmedAllocations[c.creditId],manual=state.manualAllocations[c.creditId],a=allocationFor(c);return `<div class="alloc-row"><div class="row between"><div><div class="alloc-title">${c.code} ${fmt(c.unit)}単位 ・ ${esc(c.name)}</div><div class="alloc-meta">${c.date}${c.lectureTitle?` ・ ${esc(c.lectureTitle)}`:''}</div></div><span class="status ${confirmed?'confirmed':manual?'':'rec'}">${confirmed?'確定済み':manual?'手動配分':'おすすめ'}</span></div><div class="seg" style="margin-top:9px"><button class="${a===HOSPITAL_CERT.id?'on':''}" ${confirmed?'disabled':''} onclick="setAllocation('${c.creditId}','${HOSPITAL_CERT.id}')">病院薬学認定</button><button class="${a==='unassigned'?'on':''}" ${confirmed?'disabled':''} onclick="setAllocation('${c.creditId}','unassigned')">未割当</button></div></div>`}
 
 function renderOfficialLinkRows(q=currentQualification()){const links=q.officialLinks||[];if(!links.length)return `<div class="settings-plain-note">この資格の公式リンクはまだ登録されていません。</div>`;return links.map(link=>`<a class="setting-action-row official-link-row" href="${esc(link.url)}" target="_blank" rel="noopener noreferrer"><span><strong>${esc(link.label)}</strong><small>${esc(link.sub||'公式ページ')}</small></span><b>↗</b></a>`).join('')}

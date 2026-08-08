@@ -313,3 +313,58 @@ html[data-palette="teal"] body.darkmode .seg button.on{border-color:#31504d}
 .matrix-name-main{line-height:1.25}
 .matrix-name-sub{line-height:1.25;margin-top:2px}
 @media(max-width:390px){.matrix-item-head,.matrix-item{width:112px!important;min-width:112px!important;max-width:112px!important}}
+
+
+/* v1.16 exact preview: single-goal allocation */
+.allocation-overview{padding-bottom:14px}
+.single-alloc-summary{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px}
+.single-alloc-summary>div{border:1px solid var(--line);border-radius:14px;padding:12px;background:var(--soft2);display:grid;gap:4px}
+.single-alloc-summary span{font-size:10px;color:var(--muted)}
+.single-alloc-summary strong{font-size:20px;letter-spacing:-.03em}
+.single-alloc-summary .primary{background:var(--soft);border-color:#e4ccd3}
+.single-alloc-summary .primary strong{color:var(--accent)}
+.alloc-auto-note{margin-top:10px;font-size:10.5px;line-height:1.55;color:var(--muted)}
+.single-alloc-list{padding:0;overflow:hidden}
+.single-alloc-list>.section-title{padding:14px 14px 10px;margin:0;border-bottom:1px solid var(--line)}
+.single-alloc-row{display:grid;grid-template-columns:1fr auto;gap:10px;padding:12px 14px;border-bottom:1px solid var(--line);align-items:center}
+.single-alloc-row:last-child{border-bottom:0}
+.single-alloc-main{min-width:0;display:grid;gap:3px}
+.single-alloc-date{font-size:9.5px;color:var(--muted)}
+.single-alloc-main strong{font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.single-alloc-main span{font-size:10px;color:var(--muted)}
+.single-alloc-status{font-size:9.5px;font-weight:800;border-radius:999px;padding:6px 8px;white-space:nowrap;background:var(--soft);color:var(--accent)}
+.single-alloc-status.unassigned{background:var(--soft2);color:var(--muted)}
+.alloc-excess-card{border-style:dashed}
+.alloc-excess-card .section-title{margin-bottom:6px}
+@media(max-width:390px){.single-alloc-summary strong{font-size:18px}.single-alloc-row{padding:11px 12px}.single-alloc-main strong{font-size:12px}}
+
+/* v1.16 exact preview: compact matrix + one-line training names */
+.matrix-card{overflow:hidden}
+.matrix-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
+.credit-matrix{table-layout:fixed}
+.credit-matrix thead th{height:50px!important}
+.credit-matrix tbody th,.credit-matrix tbody td{height:58px!important}
+.matrix-item-head,.matrix-item{width:108px!important;min-width:108px!important;max-width:108px!important}
+.matrix-item-btn{min-height:58px!important;padding:7px 7px!important;gap:2px!important}
+.matrix-item-btn strong{font-size:10.5px!important;line-height:1.05!important}
+.matrix-item-btn small{font-size:9px!important;line-height:1.12!important;min-width:0!important}
+.matrix-name-line{display:block;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.matrix-name-main{font-size:9px}
+.matrix-name-sub{font-size:8.5px;color:var(--muted)}
+.matrix-training-head,.credit-matrix td{width:57px!important;min-width:57px!important;max-width:57px!important}
+.matrix-training-head{padding:5px 3px!important}
+.matrix-training-head span{font-size:10.5px!important;line-height:1!important}
+.matrix-training-head small{display:block!important;white-space:nowrap!important;overflow:hidden!important;text-overflow:ellipsis!important;-webkit-line-clamp:unset!important;max-width:51px!important;margin:3px auto 0!important;font-size:7.6px!important;line-height:1.05!important}
+.matrix-total-head,.matrix-total{width:45px!important;min-width:45px!important;max-width:45px!important}
+.matrix-total-head{font-size:9px!important}
+.matrix-total strong{font-size:10.5px!important}
+.matrix-unit strong{font-size:11px!important}
+.matrix-intro{padding:10px 11px 7px!important}
+.matrix-intro .section-title{font-size:15px!important}
+.matrix-intro .small{font-size:10px!important}
+@media(max-width:390px){
+  .matrix-item-head,.matrix-item{width:104px!important;min-width:104px!important;max-width:104px!important}
+  .matrix-training-head,.credit-matrix td{width:55px!important;min-width:55px!important;max-width:55px!important}
+  .matrix-total-head,.matrix-total{width:43px!important;min-width:43px!important;max-width:43px!important}
+  .matrix-training-head small{max-width:49px!important}
+}

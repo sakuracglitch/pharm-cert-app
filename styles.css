@@ -303,3 +303,13 @@ html[data-palette="teal"] body.darkmode .shortage-card{border-color:#29413f}
 html[data-palette="teal"] body.darkmode .pill.accent{border-color:#31504d}
 html[data-palette="teal"] body.darkmode .manual-tag{border-color:#31504d;background:#161c1b}
 html[data-palette="teal"] body.darkmode .seg button.on{border-color:#31504d}
+
+
+/* v1.13 requested matrix item width / two-line truncation */
+.matrix-item-head,.matrix-item{width:112px!important;min-width:112px!important;max-width:112px!important}
+.matrix-item-btn{padding-left:9px!important;padding-right:9px!important}
+.matrix-item-btn small{display:block!important;overflow:hidden!important}
+.matrix-name-line{display:block;max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.matrix-name-main{line-height:1.25}
+.matrix-name-sub{line-height:1.25;margin-top:2px}
+@media(max-width:390px){.matrix-item-head,.matrix-item{width:112px!important;min-width:112px!important;max-width:112px!important}}

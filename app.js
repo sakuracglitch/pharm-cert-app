@@ -1,4 +1,4 @@
-const APP_VERSION='1.4.0';
+const APP_VERSION='1.5.0';
 const SCHEMA_VERSION=8;
 const LEGACY_STORAGE_KEY='pharm-cert-pwa-data';
 const DB_NAME='pharm-cert-pwa';
@@ -49,6 +49,10 @@ let state=defaultData();
 let currentView='home',editingId=null,registerMode='manual',historyMode='timeline',menuOpen=false,qualModalOpen=false,requirementsOpen=false,settingsDataOpen=false,themePickerOpen=false,planModalOpen=false;
 let historySelectMode=false;
 let selectedTrainingIds=new Set();
+let creditSelectMode=false;
+let selectedCreditEntryIds=new Set();
+let updateAvailableVersion='';
+let updateInProgress=false;
 let regDraft=freshDraft();
 let conferenceDraft=null;
 let matrixDetail=null;
@@ -168,13 +172,13 @@ function draftCodeTotal(code){return draftEntries(code).reduce((s,e)=>s+Number(e
 function draftTotal(){return regDraft.creditEntries.reduce((s,e)=>s+Number(e.unit||0),0)}
 function draftItemCount(){return new Set(regDraft.creditEntries.map(e=>e.code)).size}
 
-function app(){const palette=state.settings.theme||'burgundy';document.documentElement.dataset.theme=state.settings.dark?'dark':'light';document.documentElement.dataset.palette=palette;document.body.classList.toggle('darkmode',!!state.settings.dark);const meta=document.querySelector('meta[name="theme-color"]');if(meta)meta.setAttribute('content',state.settings.dark?'#111111':(palette==='teal'?'#236B67':'#8F2942'));const q=currentQualification();const appMeta=isHospitalQualification(q)?`<button class="top-application top-application-btn" onclick="openPlanModal()" aria-label="申請計画を確認"><span>申請予定</span><strong>${targetApplicationYear(q)}年度</strong></button>`:'';return `<div class="shell"><header class="topbar"><button class="menu-btn" onclick="toggleMenu()">${ICONS.menu}</button><div class="top-title"><strong>${esc(q.name)}</strong></div>${appMeta}</header><main class="content">${renderView()}</main>${renderNav()}${menuOpen?renderQualificationDrawer():''}${qualModalOpen?renderQualificationModal():''}${sourceViewerOpen?renderSourceViewer():''}${editConferenceIndex!==null?renderConferenceEditModal():''}${matrixDetail?renderMatrixDetailModal():''}${themePickerOpen?renderThemePickerModal():''}${planModalOpen?renderPlanModal():''}</div>`}
+function app(){const palette=state.settings.theme||'burgundy';document.documentElement.dataset.theme=state.settings.dark?'dark':'light';document.documentElement.dataset.palette=palette;document.body.classList.toggle('darkmode',!!state.settings.dark);const meta=document.querySelector('meta[name="theme-color"]');if(meta)meta.setAttribute('content',state.settings.dark?'#111111':(palette==='teal'?'#236B67':'#8F2942'));const q=currentQualification();const appMeta=isHospitalQualification(q)?`<button class="top-application top-application-btn" onclick="openPlanModal()" aria-label="申請計画を確認"><span>申請予定</span><strong>${targetApplicationYear(q)}年度</strong></button>`:'';const updateBar=updateAvailableVersion?`<div class="update-bar"><span>新しいバージョン ${esc(updateAvailableVersion)} があります</span><button onclick="forceAppUpdate()" ${updateInProgress?'disabled':''}>${updateInProgress?'更新中…':'今すぐ更新'}</button></div>`:'';return `<div class="shell">${updateBar}<header class="topbar"><button class="menu-btn" onclick="toggleMenu()">${ICONS.menu}</button><div class="top-title"><strong>${esc(q.name)}</strong></div>${appMeta}</header><main class="content">${renderView()}</main>${renderNav()}${menuOpen?renderQualificationDrawer():''}${qualModalOpen?renderQualificationModal():''}${sourceViewerOpen?renderSourceViewer():''}${editConferenceIndex!==null?renderConferenceEditModal():''}${matrixDetail?renderMatrixDetailModal():''}${themePickerOpen?renderThemePickerModal():''}${planModalOpen?renderPlanModal():''}</div>`}
 function renderNav(){const nav=[['home',ICONS.home,'ホーム'],['history',ICONS.history,'履歴'],['register',ICONS.record,'記録'],['allocation',ICONS.allocation,'配分'],['settings',ICONS.settings,'設定']];return `<nav class="nav">${nav.map(([id,ic,tx])=>`<button class="${currentView===id?'active':''} ${id==='register'?'primary-nav':''}" onclick="go('${id}')"><span class="nav-icon">${ic}</span><span>${tx}</span></button>`).join('')}</nav>`}
 function renderView(){if(currentView==='home')return renderHome();if(currentView==='history')return renderHistory();if(currentView==='register')return renderRegister();if(currentView==='allocation')return renderAllocation();if(currentView==='settings')return renderSettings();return ''}
 
 function renderHome(){const q=currentQualification();if(!isHospitalQualification(q))return renderCustomQualificationHome(q);const s=hospitalStats();const mandatorySet=new Set(s.mandatory.map(x=>x.code));return `
 <section class="card status-card">
-  <div class="row between status-head"><div><div class="kicker">STATUS</div><h2>現在の取得状況</h2></div><button class="text-link" onclick="go('allocation')">配分を見る ${ICONS.chevron}</button></div>
+  <div class="status-head"><div><div class="kicker">STATUS</div><h2>現在の取得状況</h2></div></div>
   <div class="status-section total-status">
     <div class="status-label">総合取得単位</div>
     <div class="status-total"><strong>${fmt(s.total)}</strong><span>/ 50単位</span></div>
@@ -196,7 +200,13 @@ function renderHome(){const q=currentQualification();if(!isHospitalQualification
 function renderCustomQualificationHome(q){const reqs=Object.entries(q.requirementTypes||{}).filter(([,v])=>v);return `<section class="compact-target"><div><span class="muted-label">TARGET</span><strong>${esc(q.name)}</strong></div><div class="target-year">要件未設定</div></section><section class="card shortage-card"><div class="kicker">NOW</div><h2>現在の不足</h2><div class="notice">この資格の公式テンプレートを追加すると、ここに単位・実務経験・症例・論文・学会発表などの不足だけを表示します。</div></section><section class="card"><div class="section-title">管理する要件</div>${reqs.map(([k])=>`<div class="metric"><span>${requirementLabel(k)}</span><strong>未設定</strong></div>`).join('')}</section>`}
 
 function renderRegister(){if(!isHospitalQualification())return `<section class="card"><div class="section-title">${esc(currentQualification().name)} の記録</div><div class="notice">この資格の公式要件テンプレートはまだ未設定です。</div></section>`;return `<section class="record-switch"><button class="${registerMode==='manual'?'on':''}" onclick="setRegisterMode('manual')">手入力</button><button class="${registerMode==='conference'?'on':''}" onclick="setRegisterMode('conference')">学会プログラム</button></section>${registerMode==='manual'?renderManualRegister():renderConferenceRegister()}`}
-function renderManualRegister(){return `<section class="card"><div class="field"><label>取得日</label><input class="input" type="date" value="${regDraft.date}" onchange="regDraft.date=this.value"></div><div class="field"><label>研修名</label><input class="input" value="${esc(regDraft.name)}" placeholder="研修会・学会名" onchange="regDraft.name=this.value"></div><div class="row between"><div><div class="section-title" style="margin-bottom:2px">取得項目</div><div class="small">受けた分だけ追加。合計は自動計算します。</div></div><span class="pill accent">${fmt(draftTotal())}単位</span></div>${CURRICULUM.map(renderDomain).join('')}<button class="btn accent block" style="margin-top:16px" onclick="saveTraining()">${editingId?'変更を保存':'登録する'}</button>${editingId?'<button class="btn ghost block" style="margin-top:8px" onclick="cancelEdit()">キャンセル</button>':''}</section>`}
+function renderManualRegister(){const bulk=editingId?renderCreditBulkEditor():'';return `<section class="card"><div class="field"><label>取得日</label><input class="input" type="date" value="${regDraft.date}" onchange="regDraft.date=this.value"></div><div class="field"><label>研修名</label><input class="input" value="${esc(regDraft.name)}" placeholder="研修会・学会名" onchange="regDraft.name=this.value"></div>${bulk}<div class="row between"><div><div class="section-title" style="margin-bottom:2px">取得項目</div><div class="small">受けた分だけ追加。合計は自動計算します。</div></div><span class="pill accent">${fmt(draftTotal())}単位</span></div>${CURRICULUM.map(renderDomain).join('')}<button class="btn accent block" style="margin-top:16px" onclick="saveTraining()">${editingId?'変更を保存':'登録する'}</button>${editingId?'<button class="btn ghost block" style="margin-top:8px" onclick="cancelEdit()">キャンセル</button>':''}</section>`}
+function renderCreditBulkEditor(){const entries=regDraft.creditEntries||[];if(!entries.length)return '';if(!creditSelectMode)return `<div class="credit-bulk-head"><span><strong>登録済み単位</strong><small>${entries.length}明細</small></span><button onclick="startCreditSelection()">選択して削除</button></div>`;const n=selectedCreditEntryIds.size;return `<div class="credit-bulk-box"><div class="credit-bulk-toolbar"><button onclick="toggleSelectAllCredits()">${n===entries.length?'選択解除':'すべて選択'}</button><strong>${n}件選択</strong><button class="danger" onclick="deleteSelectedCredits()" ${n?'':'disabled'}>削除</button><button onclick="cancelCreditSelection()">キャンセル</button></div><div class="credit-bulk-list">${entries.map(e=>{const on=selectedCreditEntryIds.has(e.id);return `<button class="credit-bulk-row ${on?'selected':''}" onclick="toggleCreditSelection('${e.id}')"><span class="credit-check">${on?'✓':''}</span><span><strong>${esc(e.code||'要確認')} ${fmt(e.unit)}単位</strong>${e.title?`<small>${esc(e.title)}</small>`:''}</span></button>`}).join('')}</div></div>`}
+function startCreditSelection(){creditSelectMode=true;selectedCreditEntryIds.clear();render()}
+function cancelCreditSelection(){creditSelectMode=false;selectedCreditEntryIds.clear();render()}
+function toggleCreditSelection(id){if(selectedCreditEntryIds.has(id))selectedCreditEntryIds.delete(id);else selectedCreditEntryIds.add(id);render()}
+function toggleSelectAllCredits(){const entries=regDraft.creditEntries||[];if(selectedCreditEntryIds.size===entries.length)selectedCreditEntryIds.clear();else selectedCreditEntryIds=new Set(entries.map(e=>e.id));render()}
+function deleteSelectedCredits(){const n=selectedCreditEntryIds.size;if(!n)return;if(!confirm(`${n}件の単位明細を削除しますか？`))return;regDraft.creditEntries=(regDraft.creditEntries||[]).filter(e=>!selectedCreditEntryIds.has(e.id));selectedCreditEntryIds.clear();creditSelectMode=false;render()}
 function renderDomain(g){return `<details class="domain" data-domain="${g.domain}" ${g.domain==='I'?'open':''}><summary><span>${g.domain}. ${g.title}</span><span>${g.items.reduce((a,[c])=>a+draftCodeTotal(c),0)?fmt(g.items.reduce((a,[c])=>a+draftCodeTotal(c),0))+'単位':'＋'}</span></summary>${g.items.map(([c,n])=>renderItemRow(c,n)).join('')}</details>`}
 function renderItemRow(code,name){const entries=draftEntries(code),total=draftCodeTotal(code);return `<div class="item-row multi"><div class="row between item-heading"><div><div class="item-code">${code}</div><div class="item-name">${name}</div></div>${total?`<span class="item-total">${fmt(total)}単位</span>`:''}</div><div class="add-unit-btns"><button onclick="addCredit('${code}',0.5)">＋0.5</button><button onclick="addCredit('${code}',1)">＋1.0</button><button class="custom-unit" onclick="addCustomCredit('${code}')">単位を手入力</button></div>${entries.length?`<div class="entry-chips">${entries.map(e=>`<button class="entry-chip" onclick="removeCredit('${e.id}')"><span>${fmt(e.unit)}</span><small>単位</small><b>×</b></button>`).join('')}</div>`:''}</div>`}
 
@@ -269,7 +279,7 @@ function renderAllocRow(c){const confirmed=state.confirmedAllocations[c.creditId
 
 function renderOfficialLinkRows(q=currentQualification()){const links=q.officialLinks||[];if(!links.length)return `<div class="settings-plain-note">この資格の公式リンクはまだ登録されていません。</div>`;return links.map(link=>`<a class="setting-action-row official-link-row" href="${esc(link.url)}" target="_blank" rel="noopener noreferrer"><span><strong>${esc(link.label)}</strong><small>${esc(link.sub||'公式ページ')}</small></span><b>↗</b></a>`).join('')}
 
-function renderSettings(){const q=currentQualification(),theme=state.settings.theme||'burgundy';const planRow=isHospitalQualification(q)?`<button class="setting-action-row" onclick="openPlanModal()"><span>申請計画</span><span class="setting-action-value"><strong>${targetApplicationYear(q)}年度</strong><b>›</b></span></button>`:'';return `<section class="card settings-card"><div class="section-title">資格・申請</div>${planRow}${renderOfficialLinkRows(q)}${q.id!==HOSPITAL_CERT.id?'<button class="setting-action-row danger-row" onclick="removeCurrentQualification()"><span>この目標資格を削除</span><b>›</b></button>':''}</section><section class="card settings-card"><div class="section-title">表示・照合</div><button class="setting-action-row theme-action" onclick="openThemePicker()"><span>カラーテーマ</span><span class="setting-action-value"><i class="theme-swatch ${theme}"></i><b>›</b></span></button><div class="metric"><span>HOPESS照合</span><button class="switch ${state.settings.hopess?'on':''}" onclick="toggleSetting('hopess')"><i></i></button></div><div class="metric"><span>ダークモード</span><button class="switch ${state.settings.dark?'on':''}" onclick="toggleSetting('dark')"><i></i></button></div></section><section class="settings-plain-section"><div class="settings-plain-title">データ</div><button class="settings-plain-row" onclick="exportBackup()"><span>バックアップを書き出す</span><b>→</b></button><label class="settings-plain-row file-label"><span>バックアップを読み込む</span><b>→</b><input type="file" accept="application/json" onchange="importBackup(this.files[0])"></label><div class="settings-plain-note">研修・単位データは端末内に保存されます。更新時も同じURLなら引き継がれます。</div><div class="settings-plain-title app-info-title">アプリ</div><div class="settings-info-row"><span>バージョン</span><strong>${APP_VERSION}</strong></div><div class="settings-info-row"><span>保存方式</span><strong>${storageBackend==='indexeddb'?'IndexedDB':'ローカル保存'}</strong></div></section>`}
+function renderSettings(){const q=currentQualification(),theme=state.settings.theme||'burgundy';const planRow=isHospitalQualification(q)?`<button class="setting-action-row" onclick="openPlanModal()"><span>申請計画</span><span class="setting-action-value"><strong>${targetApplicationYear(q)}年度</strong><b>›</b></span></button>`:'';return `<section class="card settings-card"><div class="section-title">資格・申請</div>${planRow}${renderOfficialLinkRows(q)}${q.id!==HOSPITAL_CERT.id?'<button class="setting-action-row danger-row" onclick="removeCurrentQualification()"><span>この目標資格を削除</span><b>›</b></button>':''}</section><section class="card settings-card"><div class="section-title">表示・照合</div><button class="setting-action-row theme-action" onclick="openThemePicker()"><span>カラーテーマ</span><span class="setting-action-value"><i class="theme-swatch ${theme}"></i><b>›</b></span></button><div class="metric"><span>HOPESS照合</span><button class="switch ${state.settings.hopess?'on':''}" onclick="toggleSetting('hopess')"><i></i></button></div><div class="metric"><span>ダークモード</span><button class="switch ${state.settings.dark?'on':''}" onclick="toggleSetting('dark')"><i></i></button></div></section><section class="settings-plain-section"><div class="settings-plain-title">データ</div><button class="settings-plain-row" onclick="exportBackup()"><span>バックアップを書き出す</span><b>→</b></button><label class="settings-plain-row file-label"><span>バックアップを読み込む</span><b>→</b><input type="file" accept="application/json" onchange="importBackup(this.files[0])"></label><div class="settings-plain-note">研修・単位データは端末内に保存されます。更新時も同じURLなら引き継がれます。</div><div class="settings-plain-title app-info-title">アプリ</div><div class="settings-info-row"><span>バージョン</span><strong>${APP_VERSION}</strong></div>${updateAvailableVersion?`<button class="settings-update-row" onclick="forceAppUpdate()"><span>新しいバージョン ${esc(updateAvailableVersion)}</span><strong>${updateInProgress?'更新中…':'今すぐ更新 →'}</strong></button>`:''}<div class="settings-info-row"><span>保存方式</span><strong>${storageBackend==='indexeddb'?'IndexedDB':'ローカル保存'}</strong></div></section>`}
 
 function renderThemePickerModal(){const theme=state.settings.theme||'burgundy';return `<div class="modal-back theme-picker-back" onclick="closeThemePicker(event)"><section class="modal theme-picker" onclick="event.stopPropagation()"><div class="row between"><h3>カラーテーマ</h3><button class="close-x" onclick="closeThemePicker()">×</button></div><button class="theme-choice-row ${theme==='burgundy'?'selected':''}" onclick="setTheme('burgundy')"><span><i class="theme-swatch burgundy"></i>ボルドー</span><b>${theme==='burgundy'?'✓':''}</b></button><button class="theme-choice-row ${theme==='teal'?'selected':''}" onclick="setTheme('teal')"><span><i class="theme-swatch teal"></i>ティール</span><b>${theme==='teal'?'✓':''}</b></button></section></div>`}
 
@@ -282,7 +292,7 @@ function renderQualificationModal(){return `<div class="modal-back" onclick="clo
 function renderSourceViewer(){return `<div class="viewer-back"><div class="viewer"><header><strong>${esc(conferenceDraft?.fileName||'元資料')}</strong><button class="close-x" onclick="closeSourceViewer()">×</button></header><div class="viewer-body">${selectedSourceURL?(selectedSourceFile?.type==='application/pdf'?`<iframe src="${selectedSourceURL}"></iframe>`:`<img src="${selectedSourceURL}" alt="元資料">`):'<div class="empty">このサンプルには元ファイルが紐づいていません。<br>PDF・画像を選択した場合は、ここで元資料を確認できます。</div>'}</div></div></div>`}
 function renderConferenceEditModal(){const x=conferenceDraft.sessions[editConferenceIndex],c=x.credits?.[0]||{code:'',unit:1};return `<div class="modal-back" onclick="closeConferenceEdit(event)"><div class="modal" onclick="event.stopPropagation()"><div class="row between"><div><div class="kicker">MANUAL CHECK</div><h3 style="margin:3px 0 0">単位区分を修正</h3></div><button class="close-x" onclick="closeConferenceEdit()">×</button></div><div class="small" style="margin:10px 0 14px">${esc(x.title)}</div><div class="field"><label>研修項目</label><select id="confEditCode" class="select"><option value="">要確認</option>${ITEM_CODES.map(code=>`<option value="${code}" ${code===c.code?'selected':''}>${code} ${itemName(code)}</option>`).join('')}</select></div><div class="field"><label>単位</label><input id="confEditUnit" class="input" type="number" step="0.5" min="0" value="${Number(c.unit||0)}"></div><button class="btn accent block" onclick="saveConferenceEdit()">修正する</button><div class="small" style="margin-top:10px">複数区分が付く講演は複数明細として保持できます。この編集画面では先頭の明細を修正します。</div></div></div>`}
 
-function go(v){currentView=v;if(v!=='register')editingId=null;render({top:true})}
+function go(v){currentView=v;if(v!=='register'){editingId=null;creditSelectMode=false;selectedCreditEntryIds.clear()}render({top:true})}
 function render(opts={}){
   const root=document.getElementById('app');
   const previousView=root.dataset.view||'';
@@ -304,9 +314,9 @@ function setRegisterMode(mode){registerMode=mode;render()}
 function addCredit(code,unit){regDraft.creditEntries.push({id:uid(),code,unit:Number(unit),title:''});render()}
 function addCustomCredit(code){const raw=prompt(`${code} の単位数を入力してください`,'0.5');if(raw===null)return;const v=Number(raw);if(v>0)addCredit(code,v)}
 function removeCredit(id){regDraft.creditEntries=regDraft.creditEntries.filter(e=>e.id!==id);render()}
-function saveTraining(){if(!regDraft.date||!regDraft.name.trim())return alert('取得日と研修名を入力してください。');if(!regDraft.creditEntries.length)return alert('取得単位を1件以上追加してください。');const t={...regDraft,id:editingId||uid(),name:regDraft.name.trim()};if(editingId){state.trainings=state.trainings.map(x=>x.id===editingId?t:x)}else state.trainings.push(t);saveData();editingId=null;regDraft=freshDraft();currentView='history';render({top:true})}
-function editTraining(id){const t=state.trainings.find(x=>x.id===id);if(!t)return;editingId=id;regDraft=JSON.parse(JSON.stringify(t));registerMode='manual';currentView='register';render({top:true})}
-function cancelEdit(){editingId=null;regDraft=freshDraft();currentView='history';render({top:true})}
+function saveTraining(){if(!regDraft.date||!regDraft.name.trim())return alert('取得日と研修名を入力してください。');if(!regDraft.creditEntries.length)return alert('取得単位を1件以上追加してください。');const t={...regDraft,id:editingId||uid(),name:regDraft.name.trim()};if(editingId){const old=state.trainings.find(x=>x.id===editingId);const keep=new Set((t.creditEntries||[]).map(e=>e.id));for(const e of old?.creditEntries||[]){if(!keep.has(e.id)){const key=`${editingId}:${e.id}`;delete state.confirmedAllocations[key];delete state.manualAllocations[key]}}state.trainings=state.trainings.map(x=>x.id===editingId?t:x)}else state.trainings.push(t);saveData();editingId=null;creditSelectMode=false;selectedCreditEntryIds.clear();regDraft=freshDraft();currentView='history';render({top:true})}
+function editTraining(id){const t=state.trainings.find(x=>x.id===id);if(!t)return;editingId=id;creditSelectMode=false;selectedCreditEntryIds.clear();regDraft=JSON.parse(JSON.stringify(t));registerMode='manual';currentView='register';render({top:true})}
+function cancelEdit(){editingId=null;creditSelectMode=false;selectedCreditEntryIds.clear();regDraft=freshDraft();currentView='history';render({top:true})}
 function setAllocation(id,val){if(state.confirmedAllocations[id])return;state.manualAllocations[id]=val;saveData();render()}
 function resetRecommendations(){state.manualAllocations={};saveData();render()}
 function confirmAllHospital(){const cs=allCredits().filter(c=>allocationFor(c)===HOSPITAL_CERT.id&&!state.confirmedAllocations[c.creditId]);if(!cs.length)return alert('確定対象がありません。');const total=cs.reduce((a,c)=>a+c.unit,0);if(!confirm(`${cs.length}明細・${fmt(total)}単位をアプリ上で確定済みにしますか？`))return;cs.forEach(c=>{state.confirmedAllocations[c.creditId]=HOSPITAL_CERT.id;delete state.manualAllocations[c.creditId]});saveData();render()}
@@ -680,6 +690,43 @@ function removeCurrentQualification(){const q=currentQualification();if(q.id===H
 function exportBackup(){state.lastBackupAt=new Date().toISOString();saveData();const blob=new Blob([JSON.stringify(state,null,2)],{type:'application/json'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`pharm-cert-backup-${todayISO()}.json`;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),0)}
 function importBackup(file){if(!file)return;const r=new FileReader();r.onload=()=>{const d=safeParse(r.result);if(!d||!Array.isArray(d.trainings))return alert('バックアップ形式を確認できませんでした。');if(!confirm('現在のデータを置き換えますか？'))return;state=migrateData(d);saveData();render()};r.readAsText(file)}
 
+
+function versionParts(v=''){return String(v).split('.').map(x=>Number(x)||0)}
+function isNewerVersion(remote,local){const a=versionParts(remote),b=versionParts(local),n=Math.max(a.length,b.length);for(let i=0;i<n;i++){const d=(a[i]||0)-(b[i]||0);if(d)return d>0}return false}
+async function checkForAppUpdate(){
+  if(location.protocol!=='https:'&&location.hostname!=='localhost')return;
+  try{
+    const res=await fetch(`./version.json?t=${Date.now()}`,{cache:'no-store'});
+    if(!res.ok)return;
+    const info=await res.json();
+    if(info?.version&&isNewerVersion(info.version,APP_VERSION)){updateAvailableVersion=info.version;render()}
+  }catch{}
+}
+async function forceAppUpdate(){
+  if(updateInProgress)return;
+  updateInProgress=true;render();
+  try{
+    if('serviceWorker' in navigator){
+      const reg=await navigator.serviceWorker.getRegistration();
+      if(reg){
+        await reg.update().catch(()=>{});
+        const candidate=reg.waiting||reg.installing;
+        if(candidate&&candidate.state!=='activated'){
+          await new Promise(resolve=>{
+            const done=()=>resolve();
+            if(candidate.state==='activated')return done();
+            candidate.addEventListener('statechange',()=>{if(candidate.state==='activated')done()});
+            setTimeout(done,3500);
+          });
+        }
+      }
+    }
+    if('caches' in window){const keys=await caches.keys();await Promise.all(keys.filter(k=>k.startsWith('pharm-cert-')).map(k=>caches.delete(k)))}
+  }catch(e){console.warn('更新処理',e)}
+  const sep=location.search?'&':'?';
+  location.replace(`${location.pathname}${location.search}${sep}update=${Date.now()}`);
+}
+
 async function bootstrap(){
   try{state=await loadData()}catch(err){console.error(err);state=migrateData(defaultData());storageBackend='localStorage'}
   regDraft=freshDraft();
@@ -687,5 +734,6 @@ async function bootstrap(){
   if('serviceWorker' in navigator){
     navigator.serviceWorker.ready.then(reg=>reg.update()).catch(()=>{});
   }
+  checkForAppUpdate();
 }
 bootstrap();

@@ -213,3 +213,16 @@ html[data-palette="teal"] .history-select-card.selected{background:#f1f8f7}
 .conference-date-field{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:10px;padding:9px 10px;background:var(--soft2);border-radius:11px}.conference-date-field span{font-size:10.5px;font-weight:750}.conference-date-field input{border:0;background:transparent;color:var(--ink);font-size:14px;text-align:right;max-width:145px}.conference-day-summary{display:flex;flex-wrap:wrap;gap:5px;margin-top:9px}.conference-day-summary span{font-size:9px;padding:5px 7px;border-radius:999px;background:var(--soft);color:var(--accent)}.conference-day-summary b{margin-right:5px}.conference-back-link{border:0;background:transparent;color:var(--muted);padding:10px 0 0;font-size:10px}
 .conference-row.is-registered{background:var(--soft2);opacity:.78}.registered-tag{border-radius:99px;padding:4px 6px;font-size:8.5px;font-weight:800;background:var(--accent);color:#fff}.conf-locked{display:block;text-align:center;font-size:8.5px;color:var(--muted);padding-top:5px}
 @media(max-height:700px){.manual-source-image{height:min(24vh,180px)}}.darkmode .manual-source-image{background:#fff}.darkmode .saved-conference-main{color:var(--ink)}
+
+/* v1.7: 履歴カード全体から編集 */
+.editable-history-card{cursor:pointer;-webkit-tap-highlight-color:transparent;transition:transform .08s ease,background .12s ease}
+.editable-history-card:active{transform:scale(.995);background:var(--soft2)}
+.editable-history-card:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+
+/* v1.8: 履歴カード全体編集・研修全削除 */
+.history-tools{padding:0 4px 8px;display:flex;align-items:center;min-height:24px}
+.editable-history-card{cursor:pointer;touch-action:manipulation}
+.btn.delete-record{background:transparent;color:var(--accent);border:1px solid color-mix(in srgb,var(--accent) 55%,var(--line));font-weight:800}
+.btn.delete-record:active{background:var(--soft)}
+.darkmode .btn.delete-record{background:transparent;color:var(--accent);border-color:var(--accent)}

@@ -1,4 +1,4 @@
-const APP_VERSION='1.8.0';
+const APP_VERSION='1.9.0';
 const SCHEMA_VERSION=9;
 const LEGACY_STORAGE_KEY='pharm-cert-pwa-data';
 const DB_NAME='pharm-cert-pwa';
@@ -52,6 +52,10 @@ let creditSelectMode=false;
 let selectedCreditEntryIds=new Set();
 let updateAvailableVersion='';
 let updateInProgress=false;
+let updateDeferred=false;
+let updateToast='';
+let lastUpdateCheckAt=0;
+let pdfWorkerSrc='';
 let regDraft=freshDraft();
 let conferenceDraft=null;
 let matrixDetail=null;
@@ -178,7 +182,7 @@ function draftCodeTotal(code){return draftEntries(code).reduce((s,e)=>s+Number(e
 function draftTotal(){return regDraft.creditEntries.reduce((s,e)=>s+Number(e.unit||0),0)}
 function draftItemCount(){return new Set(regDraft.creditEntries.map(e=>e.code)).size}
 
-function app(){const palette=state.settings.theme||'burgundy';document.documentElement.dataset.theme=state.settings.dark?'dark':'light';document.documentElement.dataset.palette=palette;document.body.classList.toggle('darkmode',!!state.settings.dark);const meta=document.querySelector('meta[name="theme-color"]');if(meta)meta.setAttribute('content',state.settings.dark?'#111111':(palette==='teal'?'#236B67':'#8F2942'));const q=currentQualification();const appMeta=isHospitalQualification(q)?`<button class="top-application top-application-btn" onclick="openPlanModal()" aria-label="申請計画を確認"><span>申請予定</span><strong>${targetApplicationYear(q)}年度</strong></button>`:'';const updateBar=updateAvailableVersion?`<div class="update-bar"><span>新しいバージョン ${esc(updateAvailableVersion)} があります</span><button onclick="forceAppUpdate()" ${updateInProgress?'disabled':''}>${updateInProgress?'更新中…':'今すぐ更新'}</button></div>`:'';return `<div class="shell">${updateBar}<header class="topbar"><button class="menu-btn" onclick="toggleMenu()">${ICONS.menu}</button><div class="top-title"><strong>${esc(q.name)}</strong></div>${appMeta}</header><main class="content">${renderView()}</main>${renderNav()}${menuOpen?renderQualificationDrawer():''}${qualModalOpen?renderQualificationModal():''}${sourceViewerOpen?renderSourceViewer():''}${editConferenceIndex!==null?renderConferenceEditModal():''}${matrixDetail?renderMatrixDetailModal():''}${themePickerOpen?renderThemePickerModal():''}${planModalOpen?renderPlanModal():''}</div>`}
+function app(){const palette=state.settings.theme||'burgundy';document.documentElement.dataset.theme=state.settings.dark?'dark':'light';document.documentElement.dataset.palette=palette;document.body.classList.toggle('darkmode',!!state.settings.dark);const meta=document.querySelector('meta[name="theme-color"]');if(meta)meta.setAttribute('content',state.settings.dark?'#111111':(palette==='teal'?'#236B67':'#8F2942'));const q=currentQualification();const appMeta=isHospitalQualification(q)?`<button class="top-application top-application-btn" onclick="openPlanModal()" aria-label="申請計画を確認"><span>申請予定</span><strong>${targetApplicationYear(q)}年度</strong></button>`:'';const updateBar=updateAvailableVersion?`<div class="update-bar"><span>${updateDeferred?`新しいバージョン ${esc(updateAvailableVersion)} は保存後に自動更新します`:`新しいバージョン ${esc(updateAvailableVersion)} を更新しています`}</span>${updateDeferred?'<button onclick="forceAppUpdate()">今すぐ更新</button>':''}</div>`:'';const toast=updateToast?`<div class="update-toast">${esc(updateToast)}</div>`:'';return `<div class="shell">${updateBar}${toast}<header class="topbar"><button class="menu-btn" onclick="toggleMenu()">${ICONS.menu}</button><div class="top-title"><strong>${esc(q.name)}</strong></div>${appMeta}</header><main class="content">${renderView()}</main>${renderNav()}${menuOpen?renderQualificationDrawer():''}${qualModalOpen?renderQualificationModal():''}${sourceViewerOpen?renderSourceViewer():''}${editConferenceIndex!==null?renderConferenceEditModal():''}${matrixDetail?renderMatrixDetailModal():''}${themePickerOpen?renderThemePickerModal():''}${planModalOpen?renderPlanModal():''}</div>`}
 function renderNav(){const nav=[['home',ICONS.home,'ホーム'],['history',ICONS.history,'履歴'],['register',ICONS.record,'記録'],['allocation',ICONS.allocation,'配分'],['settings',ICONS.settings,'設定']];return `<nav class="nav">${nav.map(([id,ic,tx])=>`<button class="${currentView===id?'active':''} ${id==='register'?'primary-nav':''}" onclick="go('${id}')"><span class="nav-icon">${ic}</span><span>${tx}</span></button>`).join('')}</nav>`}
 function renderView(){if(currentView==='home')return renderHome();if(currentView==='history')return renderHistory();if(currentView==='register')return renderRegister();if(currentView==='allocation')return renderAllocation();if(currentView==='settings')return renderSettings();return ''}
 
@@ -255,7 +259,7 @@ function renderAllocRow(c){const confirmed=state.confirmedAllocations[c.creditId
 
 function renderOfficialLinkRows(q=currentQualification()){const links=q.officialLinks||[];if(!links.length)return `<div class="settings-plain-note">この資格の公式リンクはまだ登録されていません。</div>`;return links.map(link=>`<a class="setting-action-row official-link-row" href="${esc(link.url)}" target="_blank" rel="noopener noreferrer"><span><strong>${esc(link.label)}</strong><small>${esc(link.sub||'公式ページ')}</small></span><b>↗</b></a>`).join('')}
 
-function renderSettings(){const q=currentQualification(),theme=state.settings.theme||'burgundy';const planRow=isHospitalQualification(q)?`<button class="setting-action-row" onclick="openPlanModal()"><span>申請計画</span><span class="setting-action-value"><strong>${targetApplicationYear(q)}年度</strong><b>›</b></span></button>`:'';return `<section class="card settings-card"><div class="section-title">資格・申請</div>${planRow}${renderOfficialLinkRows(q)}${q.id!==HOSPITAL_CERT.id?'<button class="setting-action-row danger-row" onclick="removeCurrentQualification()"><span>この目標資格を削除</span><b>›</b></button>':''}</section><section class="card settings-card"><div class="section-title">表示・照合</div><button class="setting-action-row theme-action" onclick="openThemePicker()"><span>カラーテーマ</span><span class="setting-action-value"><i class="theme-swatch ${theme}"></i><b>›</b></span></button><div class="metric"><span>HOPESS照合</span><button class="switch ${state.settings.hopess?'on':''}" onclick="toggleSetting('hopess')"><i></i></button></div><div class="metric"><span>ダークモード</span><button class="switch ${state.settings.dark?'on':''}" onclick="toggleSetting('dark')"><i></i></button></div></section><section class="settings-plain-section"><div class="settings-plain-title">データ</div><button class="settings-plain-row" onclick="exportBackup()"><span>バックアップを書き出す</span><b>→</b></button><label class="settings-plain-row file-label"><span>バックアップを読み込む</span><b>→</b><input type="file" accept="application/json" onchange="importBackup(this.files[0])"></label><div class="settings-plain-note">研修・単位データは端末内に保存されます。更新時も同じURLなら引き継がれます。</div><div class="settings-plain-title app-info-title">アプリ</div><div class="settings-info-row"><span>バージョン</span><strong>${APP_VERSION}</strong></div>${updateAvailableVersion?`<button class="settings-update-row" onclick="forceAppUpdate()"><span>新しいバージョン ${esc(updateAvailableVersion)}</span><strong>${updateInProgress?'更新中…':'今すぐ更新 →'}</strong></button>`:''}<div class="settings-info-row"><span>保存方式</span><strong>${storageBackend==='indexeddb'?'IndexedDB':'ローカル保存'}</strong></div></section>`}
+function renderSettings(){const q=currentQualification(),theme=state.settings.theme||'burgundy';const planRow=isHospitalQualification(q)?`<button class="setting-action-row" onclick="openPlanModal()"><span>申請計画</span><span class="setting-action-value"><strong>${targetApplicationYear(q)}年度</strong><b>›</b></span></button>`:'';return `<section class="card settings-card"><div class="section-title">資格・申請</div>${planRow}${renderOfficialLinkRows(q)}${q.id!==HOSPITAL_CERT.id?'<button class="setting-action-row danger-row" onclick="removeCurrentQualification()"><span>この目標資格を削除</span><b>›</b></button>':''}</section><section class="card settings-card"><div class="section-title">表示・照合</div><button class="setting-action-row theme-action" onclick="openThemePicker()"><span>カラーテーマ</span><span class="setting-action-value"><i class="theme-swatch ${theme}"></i><b>›</b></span></button><div class="metric"><span>HOPESS照合</span><button class="switch ${state.settings.hopess?'on':''}" onclick="toggleSetting('hopess')"><i></i></button></div><div class="metric"><span>ダークモード</span><button class="switch ${state.settings.dark?'on':''}" onclick="toggleSetting('dark')"><i></i></button></div></section><section class="settings-plain-section"><div class="settings-plain-title">データ</div><button class="settings-plain-row" onclick="exportBackup()"><span>バックアップを書き出す</span><b>→</b></button><label class="settings-plain-row file-label"><span>バックアップを読み込む</span><b>→</b><input type="file" accept="application/json" onchange="importBackup(this.files[0])"></label><div class="settings-plain-note">研修・単位データは端末内に保存されます。更新時も同じURLなら引き継がれます。</div><div class="settings-plain-title app-info-title">アプリ</div><div class="settings-info-row"><span>バージョン</span><strong>${APP_VERSION}</strong></div><button class="settings-update-row" onclick="checkUpdateManually()"><span>更新を確認</span><strong>${updateInProgress?'確認中…':'→'}</strong></button><div class="settings-info-row"><span>保存方式</span><strong>${storageBackend==='indexeddb'?'IndexedDB':'ローカル保存'}</strong></div></section>`}
 
 function renderThemePickerModal(){const theme=state.settings.theme||'burgundy';return `<div class="modal-back theme-picker-back" onclick="closeThemePicker(event)"><section class="modal theme-picker" onclick="event.stopPropagation()"><div class="row between"><h3>カラーテーマ</h3><button class="close-x" onclick="closeThemePicker()">×</button></div><button class="theme-choice-row ${theme==='burgundy'?'selected':''}" onclick="setTheme('burgundy')"><span><i class="theme-swatch burgundy"></i>ボルドー</span><b>${theme==='burgundy'?'✓':''}</b></button><button class="theme-choice-row ${theme==='teal'?'selected':''}" onclick="setTheme('teal')"><span><i class="theme-swatch teal"></i>ティール</span><b>${theme==='teal'?'✓':''}</b></button></section></div>`}
 
@@ -290,9 +294,9 @@ function setRegisterMode(mode){registerMode=mode;if(mode==='manual'&&conferenceD
 function addCredit(code,unit){regDraft.creditEntries.push({id:uid(),code,unit:Number(unit),title:''});render()}
 function addCustomCredit(code){const raw=prompt(`${code} の単位数を入力してください`,'0.5');if(raw===null)return;const v=Number(raw);if(v>0)addCredit(code,v)}
 function removeCredit(id){regDraft.creditEntries=regDraft.creditEntries.filter(e=>e.id!==id);render()}
-function saveTraining(){if(!regDraft.date||!regDraft.name.trim())return alert('取得日と研修名を入力してください。');if(!regDraft.creditEntries.length)return alert('取得単位を1件以上追加してください。');const t={...regDraft,id:editingId||uid(),name:regDraft.name.trim(),conferenceId:regDraft.conferenceId||manualSourceConferenceId||''};if(manualSourceConferenceId&&!t.files?.length){const c=state.conferences.find(x=>x.id===manualSourceConferenceId)||conferenceDraft;if(c?.fileName)t.files=[{name:c.fileName}]}if(editingId){const old=state.trainings.find(x=>x.id===editingId);const keep=new Set((t.creditEntries||[]).map(e=>e.id));for(const e of old?.creditEntries||[]){if(!keep.has(e.id)){const key=`${editingId}:${e.id}`;delete state.confirmedAllocations[key];delete state.manualAllocations[key]}}state.trainings=state.trainings.map(x=>x.id===editingId?t:x)}else state.trainings.push(t);saveData();editingId=null;creditSelectMode=false;selectedCreditEntryIds.clear();manualSourceConferenceId=null;regDraft=freshDraft();currentView='history';render({top:true})}
+function saveTraining(){if(!regDraft.date||!regDraft.name.trim())return alert('取得日と研修名を入力してください。');if(!regDraft.creditEntries.length)return alert('取得単位を1件以上追加してください。');const t={...regDraft,id:editingId||uid(),name:regDraft.name.trim(),conferenceId:regDraft.conferenceId||manualSourceConferenceId||''};if(manualSourceConferenceId&&!t.files?.length){const c=state.conferences.find(x=>x.id===manualSourceConferenceId)||conferenceDraft;if(c?.fileName)t.files=[{name:c.fileName}]}if(editingId){const old=state.trainings.find(x=>x.id===editingId);const keep=new Set((t.creditEntries||[]).map(e=>e.id));for(const e of old?.creditEntries||[]){if(!keep.has(e.id)){const key=`${editingId}:${e.id}`;delete state.confirmedAllocations[key];delete state.manualAllocations[key]}}state.trainings=state.trainings.map(x=>x.id===editingId?t:x)}else state.trainings.push(t);saveData();editingId=null;creditSelectMode=false;selectedCreditEntryIds.clear();manualSourceConferenceId=null;regDraft=freshDraft();currentView='history';render({top:true});setTimeout(maybeApplyDeferredUpdate,0)}
 function editTraining(id){const t=state.trainings.find(x=>x.id===id);if(!t)return;editingId=id;creditSelectMode=false;selectedCreditEntryIds.clear();manualSourceConferenceId=t.conferenceId||null;regDraft=JSON.parse(JSON.stringify(t));registerMode='manual';currentView='register';if(manualSourceConferenceId)prepareConferenceSource(manualSourceConferenceId).finally(()=>render({top:true}));else render({top:true})}
-function cancelEdit(){editingId=null;creditSelectMode=false;selectedCreditEntryIds.clear();manualSourceConferenceId=null;regDraft=freshDraft();currentView='history';render({top:true})}
+function cancelEdit(){editingId=null;creditSelectMode=false;selectedCreditEntryIds.clear();manualSourceConferenceId=null;regDraft=freshDraft();currentView='history';render({top:true});setTimeout(maybeApplyDeferredUpdate,0)}
 function deleteCurrentTraining(){
   if(!editingId)return;
   const t=state.trainings.find(x=>x.id===editingId);
@@ -348,7 +352,7 @@ async function loadConferenceSource(file){
   upsertConferenceDraft();if(storageBackend==='indexeddb'){try{await idbFileSet(sourceId,file)}catch(err){console.warn('元資料の保存に失敗しました',err)}}render();
   const isPdf=file.type==='application/pdf'||/\.pdf$/i.test(file.name);const isImage=(file.type||'').startsWith('image/')||/\.(png|jpe?g|webp|heic)$/i.test(file.name);
   if(!isPdf&&!isImage){conferenceDraft.analysisPending=false;conferenceDraft.analysisError='このファイル形式は自動読取に対応していません。PDFまたは画像を選択してください。';upsertConferenceDraft();render();return}
-  try{const sessions=isPdf?await parseConferencePdf(file):await parseConferenceImage(file);if(!conferenceDraft)return;conferenceDraft.analysisPending=false;conferenceDraft.sessions=sessions;conferenceDraft.autoParsed=true;const unresolved=sessions.filter(x=>!(x.credits||[]).length||(x.credits||[]).some(c=>!c.code||!(Number(c.unit)>0))).length;const pageNote=isPdf&&conferenceDraft.detectedUnitPages?.length?` 単位情報ページ: ${conferenceDraft.detectedUnitPages.join('・')}ページ。`:'';conferenceDraft.analysisWarning=unresolved?`${sessions.length}件を抽出しました。${pageNote}うち${unresolved}件は単位区分または単位数を手動で確認してください。`:`${sessions.length}件を${isPdf?'PDF':'画像'}から抽出しました。${pageNote}登録前に元資料との一致を確認してください。`;if(!sessions.length)conferenceDraft.analysisError=isPdf?'単位情報を自動抽出できませんでした。画像スキャン形式のPDF、または表の文字情報を取得できないPDFの可能性があります。元資料を見ながら入力してください。':'画像から単位情報を自動抽出できませんでした。画像を表示したまま入力できます。';upsertConferenceDraft();render()}catch(err){console.error('資料解析エラー',err);if(!conferenceDraft)return;conferenceDraft.analysisPending=false;conferenceDraft.analysisError='資料を解析できませんでした。元資料を表示しながら入力できます。';upsertConferenceDraft();render()}
+  try{const sessions=isPdf?await parseConferencePdf(file):await parseConferenceImage(file);if(!conferenceDraft)return;conferenceDraft.analysisPending=false;conferenceDraft.sessions=sessions;conferenceDraft.autoParsed=true;const unresolved=sessions.filter(x=>!(x.credits||[]).length||(x.credits||[]).some(c=>!c.code||!(Number(c.unit)>0))).length;const pageNote=isPdf&&conferenceDraft.detectedUnitPages?.length?` 単位情報ページ: ${conferenceDraft.detectedUnitPages.join('・')}ページ。`:'';conferenceDraft.analysisWarning=unresolved?`${sessions.length}件を抽出しました。${pageNote}うち${unresolved}件は単位区分または単位数を手動で確認してください。`:`${sessions.length}件を${isPdf?'PDF':'画像'}から抽出しました。${pageNote}登録前に元資料との一致を確認してください。`;if(!sessions.length)conferenceDraft.analysisError=isPdf?'単位情報を自動抽出できませんでした。画像スキャン形式のPDF、または表の文字情報を取得できないPDFの可能性があります。元資料を見ながら入力してください。':'画像の文字は読み取りましたが、単位区分と単位数を結び付けられませんでした。文字が小さい表や色付きの時間割はOCRが苦手です。画像を表示したまま入力できます。';upsertConferenceDraft();render()}catch(err){console.error('資料解析エラー',err);if(!conferenceDraft)return;conferenceDraft.analysisPending=false;conferenceDraft.analysisError=(err?.message||'資料を解析できませんでした。')+' 元資料を表示しながら入力できます。';upsertConferenceDraft();render()}
 }
 function releaseSelectedSource(){selectedSourceFile=null;if(selectedSourceURL)URL.revokeObjectURL(selectedSourceURL);selectedSourceURL=''}
 function conferenceSerializable(d){const x=JSON.parse(JSON.stringify(d));x.analysisPending=false;delete x.analysisMessage;return x}
@@ -359,6 +363,64 @@ function leaveConferenceDraft(){upsertConferenceDraft();conferenceDraft=null;man
 async function deleteSavedConference(id){const c=state.conferences.find(x=>x.id===id);if(!c)return;if(!confirm(`「${c.name}」の取り込みデータを削除しますか？\n登録済みの研修記録は削除されません。`))return;state.conferences=state.conferences.filter(x=>x.id!==id);saveData();if(c.sourceId&&storageBackend==='indexeddb')idbFileDelete(c.sourceId).catch(()=>{});if(conferenceDraft?.id===id){conferenceDraft=null;releaseSelectedSource()}render()}
 function setConferenceDate(value){if(!conferenceDraft||!value)return;conferenceDraft.date=value;upsertConferenceDraft();render()}
 function startManualFromConference(){if(!conferenceDraft)return;manualSourceConferenceId=conferenceDraft.id;regDraft=freshDraft();regDraft.date=conferenceDraft.date||todayISO();regDraft.name=conferenceDraft.name||'';regDraft.conferenceId=conferenceDraft.id;registerMode='manual';render({top:true})}
+
+
+function loadExternalScript(url,timeoutMs=18000){
+  return new Promise((resolve,reject)=>{
+    const existing=[...document.scripts].find(s=>s.src===url);
+    if(existing&&existing.dataset.loaded==='1')return resolve(url);
+    const script=existing||document.createElement('script');
+    let done=false;
+    const finish=(ok,err)=>{if(done)return;done=true;clearTimeout(timer);if(ok){script.dataset.loaded='1';resolve(url)}else{if(!existing)script.remove();reject(err||new Error(`script load failed: ${url}`))}};
+    script.onload=()=>finish(true);
+    script.onerror=()=>finish(false,new Error(`script load failed: ${url}`));
+    const timer=setTimeout(()=>finish(false,new Error(`script timeout: ${url}`)),timeoutMs);
+    if(!existing){script.src=url;script.async=true;script.crossOrigin='anonymous';document.head.appendChild(script)}
+  });
+}
+async function ensurePdfJs(){
+  if(window.pdfjsLib)return window.pdfjsLib;
+  const sources=[
+    ['https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js','https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'],
+    ['https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js','https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js'],
+    ['https://unpkg.com/pdfjs-dist@3.11.174/build/pdf.min.js','https://unpkg.com/pdfjs-dist@3.11.174/build/pdf.worker.min.js']
+  ];
+  let lastErr=null;
+  for(const [main,worker] of sources){
+    try{await loadExternalScript(main);if(window.pdfjsLib){pdfWorkerSrc=worker;return window.pdfjsLib}}catch(err){lastErr=err}
+  }
+  throw new Error(`PDF読み取り機能を読み込めませんでした。通信状態を確認してください。${lastErr?'':''}`);
+}
+async function ensureTesseract(){
+  if(window.Tesseract)return window.Tesseract;
+  const sources=['https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js','https://unpkg.com/tesseract.js@5/dist/tesseract.min.js'];
+  let lastErr=null;
+  for(const src of sources){
+    try{await loadExternalScript(src,22000);if(window.Tesseract)return window.Tesseract}catch(err){lastErr=err}
+  }
+  throw new Error(`画像OCR機能を読み込めませんでした。通信状態を確認してください。${lastErr?'':''}`);
+}
+async function imageToOcrBlob(file){
+  const url=URL.createObjectURL(file);
+  try{
+    const img=await new Promise((resolve,reject)=>{const i=new Image();i.onload=()=>resolve(i);i.onerror=reject;i.src=url});
+    const w=img.naturalWidth||img.width,h=img.naturalHeight||img.height;
+    if(!w||!h)return file;
+    const maxPixels=7_200_000;
+    const byPixels=Math.sqrt(maxPixels/(w*h));
+    const byWidth=1900/w;
+    const scale=Math.max(0.45,Math.min(1.8,byPixels,byWidth>1?byWidth:1));
+    const canvas=document.createElement('canvas');
+    canvas.width=Math.max(1,Math.round(w*scale));canvas.height=Math.max(1,Math.round(h*scale));
+    const ctx=canvas.getContext('2d',{willReadFrequently:false});
+    ctx.imageSmoothingEnabled=true;ctx.imageSmoothingQuality='high';
+    // Dense conference schedules are easier for OCR after grayscale + contrast enhancement.
+    ctx.filter='grayscale(1) contrast(1.65) brightness(1.08)';
+    ctx.drawImage(img,0,0,canvas.width,canvas.height);
+    const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/jpeg',0.96));
+    return blob||file;
+  }finally{URL.revokeObjectURL(url)}
+}
 
 function normalizePdfCode(raw=''){
   const map={'Ⅰ':'I','Ⅱ':'II','Ⅲ':'III','Ⅳ':'IV','Ⅴ':'V'};
@@ -482,42 +544,84 @@ function pdfItemsToLines(items,pageNo){
   return lines;
 }
 async function pdfTextLines(file){
-  if(!window.pdfjsLib)throw new Error('PDF.js unavailable');
-  window.pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+  const lib=await ensurePdfJs();
+  lib.GlobalWorkerOptions.workerSrc=pdfWorkerSrc||'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
   const data=await file.arrayBuffer();
-  const pdf=await window.pdfjsLib.getDocument({data}).promise;
-  const candidatePages=[];
-  let guidePage=null,tableStarted=false,lowAfterTable=0;
-  let fallback=[];
-  for(let pageNo=1;pageNo<=pdf.numPages;pageNo++){
-    if(conferenceDraft){conferenceDraft.analysisMessage=`単位情報のページを探しています… ${pageNo} / ${pdf.numPages}`;render()}
+  const pdf=await lib.getDocument({data}).promise;
+  const cache=new Map();
+  const readPage=async(pageNo)=>{
+    if(cache.has(pageNo))return cache.get(pageNo);
     const page=await pdf.getPage(pageNo);
     const content=await page.getTextContent();
     const flat=normalizeSourceText((content.items||[]).map(it=>String(it.str||'')).join(' '));
-    const score=pdfPageScore(flat),isTable=pdfPageHasUnitTable(flat),isGuide=/単位に関するご案内/.test(flat);
-    const lines=pdfItemsToLines(content.items||[],pageNo);
-    if(score>=35)fallback.push({page:pageNo,score,lines});
-    if(guidePage===null&&isGuide){guidePage=pageNo;candidatePages.push({page:pageNo,score,lines});continue}
-    if(guidePage!==null){
-      // Unit tables are normally placed immediately after the unit guidance page.
-      if(pageNo>guidePage){
-        if(isTable||score>=25||pageNo<=guidePage+2){candidatePages.push({page:pageNo,score,lines})}
-        if(isTable){tableStarted=true;lowAfterTable=0}
-        else if(tableStarted)lowAfterTable++;
-        // After unit tables end, avoid parsing the remaining abstract pages.
-        if(tableStarted&&lowAfterTable>=2)break;
-        if(pageNo-guidePage>=12)break;
+    const info={page:pageNo,flat,score:pdfPageScore(flat),isTable:pdfPageHasUnitTable(flat),isGuide:/単位に関するご案内|認定単位(?:について|のご案内)?|研修単位(?:について|のご案内)?/.test(flat),lines:pdfItemsToLines(content.items||[],pageNo)};
+    cache.set(pageNo,info);return info;
+  };
+  const tocRefs=[];
+  const tocLimit=Math.min(pdf.numPages,15);
+  if(conferenceDraft){conferenceDraft.analysisMessage='目次から単位情報ページを探しています…';render()}
+  for(let pageNo=1;pageNo<=tocLimit;pageNo++){
+    const p=await readPage(pageNo);
+    if(!/(?:目\s*次|CONTENTS)/i.test(p.flat))continue;
+    const t=p.flat;
+    const patterns=[
+      /(?:単位に関するご案内|認定単位(?:について|のご案内)?|研修単位(?:について|のご案内)?|単位取得(?:について|のご案内)?)[^0-9]{0,90}([0-9]{1,3})/gi,
+      /(?:単位|研修項目)[^0-9]{0,60}([0-9]{1,3})/gi
+    ];
+    for(const re of patterns){let m;while((m=re.exec(t))){const n=Number(m[1]);if(n>=1&&n<=pdf.numPages&&!tocRefs.includes(n))tocRefs.push(n)}}
+  }
+
+  let guidePage=null,tocReference=null;
+  if(tocRefs.length){
+    // Printed page numbers and PDF page indices can differ by a cover page or two.
+    // Check around every TOC reference and choose the strongest unit-information page.
+    let best=null;
+    for(const ref of tocRefs){
+      for(let n=Math.max(1,ref-4);n<=Math.min(pdf.numPages,ref+4);n++){
+        const p=await readPage(n);
+        const bonus=p.isGuide?180:(p.isTable?55:0);
+        const candidate={page:n,score:p.score+bonus-Math.abs(n-ref)*2,ref};
+        if(!best||candidate.score>best.score)best=candidate;
       }
     }
+    if(best&&best.score>=45){guidePage=best.page;tocReference=best.ref}
   }
-  let chosen=candidatePages;
-  if(!chosen.length)chosen=fallback.sort((a,b)=>a.page-b.page);
-  if(!chosen.length){
-    // No clear unit pages found. Returning no rows is safer than treating abstract text as units.
-    return [];
+
+  const collectFromGuide=async(startPage)=>{
+    const chosen=[];let tableStarted=false,lowAfterTable=0;
+    for(let n=startPage;n<=Math.min(pdf.numPages,startPage+10);n++){
+      const p=await readPage(n);
+      if(n===startPage||p.isTable||p.score>=25||(!tableStarted&&n<=startPage+2))chosen.push(p);
+      if(p.isTable){tableStarted=true;lowAfterTable=0}else if(tableStarted)lowAfterTable++;
+      if(tableStarted&&lowAfterTable>=2)break;
+    }
+    return chosen;
+  };
+
+  let chosen=[];
+  if(guidePage!==null){
+    if(conferenceDraft){conferenceDraft.analysisMessage=`目次の「単位」案内（${tocReference||guidePage}ページ）を基に、PDF ${guidePage}ページ付近を確認しています…`;render()}
+    chosen=await collectFromGuide(guidePage);
   }
-  const pages=[...new Set(chosen.map(x=>x.page))].sort((a,b)=>a-b);
-  if(conferenceDraft){conferenceDraft.detectedUnitPages=pages;conferenceDraft.analysisMessage=`単位情報ページ（${pages.join('・')}ページ）を優先解析しています…`;render()}
+
+  if(!chosen.some(x=>x.isTable)){
+    // TOC did not resolve, or the document has no usable TOC. Search the PDF itself.
+    if(conferenceDraft){conferenceDraft.analysisMessage='目次で特定できなかったため、PDF全体から単位情報を探しています…';render()}
+    const fallback=[];let directGuide=null;
+    for(let pageNo=1;pageNo<=pdf.numPages;pageNo++){
+      if(conferenceDraft&&pageNo%3===0){conferenceDraft.analysisMessage=`PDF全体から単位情報を探しています… ${pageNo} / ${pdf.numPages}`;render()}
+      const p=await readPage(pageNo);
+      if(directGuide===null&&p.isGuide)directGuide=pageNo;
+      if(p.score>=35||p.isTable)fallback.push(p);
+      if(directGuide!==null&&pageNo>=directGuide+8)break;
+    }
+    chosen=directGuide!==null?await collectFromGuide(directGuide):fallback.sort((a,b)=>a.page-b.page);
+  }
+
+  chosen=chosen.filter((x,i,a)=>a.findIndex(y=>y.page===x.page)===i);
+  if(!chosen.length||!chosen.some(x=>x.isTable))return [];
+  const pages=chosen.filter(x=>x.isTable||x.isGuide).map(x=>x.page).sort((a,b)=>a-b);
+  if(conferenceDraft){conferenceDraft.detectedUnitPages=[...new Set(pages)];conferenceDraft.analysisMessage=`単位情報ページ（${[...new Set(pages)].join('・')}ページ）を優先解析しています…`;render()}
   return chosen.sort((a,b)=>a.page-b.page).flatMap(x=>x.lines);
 }
 
@@ -531,21 +635,30 @@ function ocrTextToLines(text=''){
 }
 
 async function parseConferenceImage(file){
-  if(!window.Tesseract)throw new Error('画像OCRライブラリを読み込めませんでした');
-  const result=await window.Tesseract.recognize(file,'jpn+eng',{
-    logger:m=>{
-      if(!conferenceDraft)return;
-      if(m.status==='recognizing text'){
-        conferenceDraft.analysisMessage=`画像を読み取っています… ${Math.round((m.progress||0)*100)}%`;
-        render();
-      }else if(m.status){
-        conferenceDraft.analysisMessage='画像OCRを準備しています…';
-        render();
-      }
+  const T=await ensureTesseract();
+  const logger=m=>{
+    if(!conferenceDraft)return;
+    if(m.status==='recognizing text')conferenceDraft.analysisMessage=`画像を読み取っています… ${Math.round((m.progress||0)*100)}%`;
+    else if(m.status)conferenceDraft.analysisMessage='画像OCRを準備しています…';
+    render();
+  };
+  let worker=null;
+  try{
+    // v5's worker API is more reliable on iPhone than the old one-shot recognize helper.
+    worker=await T.createWorker(['jpn','eng'],1,{logger});
+    try{await worker.setParameters({preserve_interword_spaces:'1',user_defined_dpi:'300'})}catch{}
+    const prepared=await imageToOcrBlob(file);
+    let result=await worker.recognize(prepared);
+    let raw=result?.data?.text||'';
+    let sessions=parseConferenceLines(ocrTextToLines(raw));
+    // If contrast processing lost useful detail, retry the original once.
+    if(!sessions.length&&prepared!==file){
+      if(conferenceDraft){conferenceDraft.analysisMessage='別の読み取り方法でもう一度確認しています…';render()}
+      result=await worker.recognize(file);raw=result?.data?.text||'';sessions=parseConferenceLines(ocrTextToLines(raw));
     }
-  });
-  const raw=result?.data?.text||'';
-  return parseConferenceLines(ocrTextToLines(raw));
+    if(conferenceDraft)conferenceDraft.ocrTextPreview=raw.slice(0,5000);
+    return sessions;
+  }finally{if(worker)try{await worker.terminate()}catch{}}
 }
 
 function sectionDefaultUnitFromText(text=''){
@@ -621,9 +734,25 @@ function parseConferenceLines(lines){
     sessions.push({title,page:line.page||1,credits,status:'undecided',sourceOrder:order,rawText:line.text});
   }
 
+  // Merge split sub-credit rows such as 「①II-4 0.5」「②II-5 0.5」 that belong to one seminar.
+  const subMerged=[];
+  for(const s of sessions){
+    const prev=subMerged[subMerged.length-1];
+    const prevSub=prev&&/[①1]\s*(?:IV|III|II|V|I)\s*[-－–—ー]\s*[1-6]/i.test(normalizeSourceText(prev.rawText||''));
+    const curSub=/[②2]\s*(?:IV|III|II|V|I)\s*[-－–—ー]\s*[1-6]/i.test(normalizeSourceText(s.rawText||''));
+    if(prev&&prev.page===s.page&&prevSub&&curSub){
+      prev.credits=[...(prev.credits||[]),...(s.credits||[])];
+      const combined=`${prev.title||''} ${s.title||''}`.replace(/\s+/g,' ').trim();
+      if(combined.length>prev.title.length)prev.title=combined.slice(0,180);
+      prev.rawText=`${prev.rawText||''} ${s.rawText||''}`.trim();
+      continue;
+    }
+    subMerged.push(s);
+  }
+
   // Merge accidental duplicate rows from PDF text-layer fragmentation, while preserving source order.
   const merged=[];
-  for(const s of sessions){
+  for(const s of subMerged){
     const signature=(s.credits||[]).map(c=>`${c.code}:${Number(c.unit||0)}`).join('|');
     const prev=merged[merged.length-1];
     if(prev&&prev.page===s.page&&signature&&signature===(prev.credits||[]).map(c=>`${c.code}:${Number(c.unit||0)}`).join('|')&&prev.title===s.title)continue;
@@ -646,8 +775,8 @@ function sampleConferenceSessions(){return [
   {title:'病院薬剤師が知っておきたい医療用医薬品の販売情報提供活動調査',page:24,credits:[{code:'II-3',unit:1}]},
   {title:'なぜ今、薬剤師がGCP改正を理解する必要があるのか',page:24,credits:[{code:'II-6',unit:1}]},
   {title:'課題をチャンスに変えるとき ～薬剤業務におけるイノベーション～',page:24,credits:[{code:'II-6',unit:1}]},
-  {title:'オーバードーズを“救急〜精神科〜地域”でどう防ぎ、どう関わるか',page:24,credits:[{code:'II-2',unit:1}]},
-  {title:'療養病床における薬剤師の未来展望',page:24,credits:[{code:'II-2',unit:1}]},
+  {title:'オーバードーズを“救急〜精神科〜地域”でどう防ぎ、どう関わるか',page:24,credits:[{code:'III-2',unit:1}]},
+  {title:'療養病床における薬剤師の未来展望',page:24,credits:[{code:'III-2',unit:1}]},
   {title:'患者・家族のQOLを支えるために～総合的な視点を活かした医療安全～',page:24,credits:[{code:'III-2',unit:1}]},
   {title:'地域医療連携 Update 2026',page:24,credits:[{code:'III-2',unit:1}]},
   {title:'領域取得支援セミナー2026',page:24,credits:[{code:'II-4',unit:.5},{code:'II-5',unit:.5}]},
@@ -687,24 +816,58 @@ function importBackup(file){if(!file)return;const r=new FileReader();r.onload=()
 
 function versionParts(v=''){return String(v).split('.').map(x=>Number(x)||0)}
 function isNewerVersion(remote,local){const a=versionParts(remote),b=versionParts(local),n=Math.max(a.length,b.length);for(let i=0;i<n;i++){const d=(a[i]||0)-(b[i]||0);if(d)return d>0}return false}
-async function checkForAppUpdate(){
+function hasUnsafeUnsavedInput(){
+  if(conferenceDraft?.analysisPending||editConferenceIndex!==null)return true;
+  if(currentView!=='register'||registerMode!=='manual')return false;
+  if(editingId)return true;
+  return !!(regDraft.name?.trim()||regDraft.creditEntries?.length||regDraft.memo?.trim()||manualSourceConferenceId);
+}
+function showUpdateToast(text){updateToast=text;render();setTimeout(()=>{if(updateToast===text){updateToast='';render()}},3200)}
+async function checkForAppUpdate(opts={}){
+  const {auto=true,manual=false,force=false}=opts;
   if(location.protocol!=='https:'&&location.hostname!=='localhost')return;
+  const now=Date.now();if(!force&&!manual&&now-lastUpdateCheckAt<15000)return;lastUpdateCheckAt=now;
   try{
     const res=await fetch(`./version.json?t=${Date.now()}`,{cache:'no-store'});
-    if(!res.ok)return;
+    if(!res.ok)throw new Error('version check failed');
     const info=await res.json();
-    if(info?.version&&isNewerVersion(info.version,APP_VERSION)){updateAvailableVersion=info.version;render()}
-  }catch{}
+    if(info?.version&&isNewerVersion(info.version,APP_VERSION)){
+      updateAvailableVersion=info.version;
+      if(auto&&!hasUnsafeUnsavedInput()){updateDeferred=false;render();return forceAppUpdate(info.version,true)}
+      updateDeferred=true;render();
+      if(manual)alert(`新しいバージョン ${info.version} があります。入力中の内容を保存した後、自動更新します。`);
+      return;
+    }
+    updateAvailableVersion='';updateDeferred=false;
+    if(manual)alert(`最新バージョン（${APP_VERSION}）です。`);
+  }catch(err){if(manual)alert('更新情報を確認できませんでした。通信状態を確認してください。')}
 }
-async function forceAppUpdate(){if(updateInProgress)return;updateInProgress=true;render();try{if('caches' in window){const keys=await caches.keys();await Promise.all(keys.filter(k=>k.startsWith('pharm-cert-')).map(k=>caches.delete(k)))}if('serviceWorker' in navigator){const regs=await navigator.serviceWorker.getRegistrations();for(const reg of regs){try{await reg.update();if(reg.waiting)reg.waiting.postMessage({type:'SKIP_WAITING'})}catch{}}}}catch(e){console.warn('更新処理',e)}location.replace(`${location.pathname}?update=${Date.now()}`)}
+async function checkUpdateManually(){return checkForAppUpdate({auto:true,manual:true,force:true})}
+async function forceAppUpdate(targetVersion=updateAvailableVersion,automatic=false){
+  if(updateInProgress)return;
+  if(hasUnsafeUnsavedInput()&&!automatic){if(!confirm('入力途中の内容があります。保存せずに更新しますか？'))return}
+  if(hasUnsafeUnsavedInput()&&automatic){updateDeferred=true;render();return}
+  updateInProgress=true;updateDeferred=false;render();
+  try{
+    if('caches' in window){const keys=await caches.keys();await Promise.all(keys.filter(k=>k.startsWith('pharm-cert-')).map(k=>caches.delete(k)))}
+    if('serviceWorker' in navigator){const regs=await navigator.serviceWorker.getRegistrations();for(const reg of regs){try{await reg.update();if(reg.waiting)reg.waiting.postMessage({type:'SKIP_WAITING'})}catch{}}}
+    if(targetVersion)localStorage.setItem('pharm-cert-update-notice',targetVersion);
+  }catch(e){console.warn('更新処理',e)}
+  location.replace(`${location.pathname}?update=${Date.now()}`);
+}
+function maybeApplyDeferredUpdate(){if(updateAvailableVersion&&!hasUnsafeUnsavedInput())forceAppUpdate(updateAvailableVersion,true)}
+function scheduleForegroundUpdateCheck(){setTimeout(()=>checkForAppUpdate({auto:true}),250)}
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')scheduleForegroundUpdateCheck()});
+window.addEventListener('pageshow',scheduleForegroundUpdateCheck);
+window.addEventListener('focus',scheduleForegroundUpdateCheck);
 
 async function bootstrap(){
   try{state=await loadData()}catch(err){console.error(err);state=migrateData(defaultData());storageBackend='localStorage'}
   regDraft=freshDraft();
+  const notice=localStorage.getItem('pharm-cert-update-notice');
+  if(notice===APP_VERSION){localStorage.removeItem('pharm-cert-update-notice');updateToast=`v${APP_VERSION}に更新しました`}
   render();
-  if('serviceWorker' in navigator){
-    navigator.serviceWorker.ready.then(reg=>reg.update()).catch(()=>{});
-  }
-  checkForAppUpdate();
+  if('serviceWorker' in navigator)navigator.serviceWorker.ready.then(reg=>reg.update()).catch(()=>{});
+  checkForAppUpdate({auto:true,force:true});
 }
 bootstrap();

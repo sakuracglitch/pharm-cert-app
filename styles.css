@@ -226,3 +226,7 @@ html[data-palette="teal"] .history-select-card.selected{background:#f1f8f7}
 .btn.delete-record{background:transparent;color:var(--accent);border:1px solid color-mix(in srgb,var(--accent) 55%,var(--line));font-weight:800}
 .btn.delete-record:active{background:var(--soft)}
 .darkmode .btn.delete-record{background:transparent;color:var(--accent);border-color:var(--accent)}
+
+
+/* v1.9 automatic update feedback */
+.update-toast{position:fixed;left:50%;top:calc(env(safe-area-inset-top) + 58px);transform:translateX(-50%);z-index:90;background:var(--text);color:var(--bg);padding:9px 13px;border-radius:999px;font-size:12px;font-weight:700;box-shadow:0 7px 22px rgba(0,0,0,.18);white-space:nowrap;max-width:calc(100vw - 32px);overflow:hidden;text-overflow:ellipsis}

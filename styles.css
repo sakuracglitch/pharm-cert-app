@@ -230,3 +230,6 @@ html[data-palette="teal"] .history-select-card.selected{background:#f1f8f7}
 
 /* v1.9 automatic update feedback */
 .update-toast{position:fixed;left:50%;top:calc(env(safe-area-inset-top) + 58px);transform:translateX(-50%);z-index:90;background:var(--text);color:var(--bg);padding:9px 13px;border-radius:999px;font-size:12px;font-weight:700;box-shadow:0 7px 22px rgba(0,0,0,.18);white-space:nowrap;max-width:calc(100vw - 32px);overflow:hidden;text-overflow:ellipsis}
+
+/* v1.10 conference completion */
+.conference-completion-modal h3{font-size:20px;margin:4px 0 0}.completion-summary{display:grid;gap:3px;margin:14px 0;padding:12px;border-radius:13px;background:var(--soft2)}.completion-summary strong{font-size:16px}.completion-summary span{font-size:10px;color:var(--muted)}.completion-delete{color:var(--accent);border-color:color-mix(in srgb,var(--accent) 35%,var(--line))}.darkmode .completion-summary{background:var(--soft2)}

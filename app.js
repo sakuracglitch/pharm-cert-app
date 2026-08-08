@@ -1,4 +1,4 @@
-const APP_VERSION='1.1.0';
+const APP_VERSION='1.4.0';
 const SCHEMA_VERSION=8;
 const LEGACY_STORAGE_KEY='pharm-cert-pwa-data';
 const DB_NAME='pharm-cert-pwa';
@@ -47,6 +47,8 @@ const defaultData=()=>({
 
 let state=defaultData();
 let currentView='home',editingId=null,registerMode='manual',historyMode='timeline',menuOpen=false,qualModalOpen=false,requirementsOpen=false,settingsDataOpen=false,themePickerOpen=false,planModalOpen=false;
+let historySelectMode=false;
+let selectedTrainingIds=new Set();
 let regDraft=freshDraft();
 let conferenceDraft=null;
 let matrixDetail=null;
@@ -198,19 +200,61 @@ function renderManualRegister(){return `<section class="card"><div class="field"
 function renderDomain(g){return `<details class="domain" data-domain="${g.domain}" ${g.domain==='I'?'open':''}><summary><span>${g.domain}. ${g.title}</span><span>${g.items.reduce((a,[c])=>a+draftCodeTotal(c),0)?fmt(g.items.reduce((a,[c])=>a+draftCodeTotal(c),0))+'単位':'＋'}</span></summary>${g.items.map(([c,n])=>renderItemRow(c,n)).join('')}</details>`}
 function renderItemRow(code,name){const entries=draftEntries(code),total=draftCodeTotal(code);return `<div class="item-row multi"><div class="row between item-heading"><div><div class="item-code">${code}</div><div class="item-name">${name}</div></div>${total?`<span class="item-total">${fmt(total)}単位</span>`:''}</div><div class="add-unit-btns"><button onclick="addCredit('${code}',0.5)">＋0.5</button><button onclick="addCredit('${code}',1)">＋1.0</button><button class="custom-unit" onclick="addCustomCredit('${code}')">単位を手入力</button></div>${entries.length?`<div class="entry-chips">${entries.map(e=>`<button class="entry-chip" onclick="removeCredit('${e.id}')"><span>${fmt(e.unit)}</span><small>単位</small><b>×</b></button>`).join('')}</div>`:''}</div>`}
 
-function renderConferenceRegister(){const s=hospitalStats();if(!conferenceDraft)return `<section class="card"><div class="row between"><div><div class="section-title" style="margin-bottom:3px">学会プログラムから登録</div><div class="small">PDF内の文字情報から、掲載順を保ったまま単位候補を抽出します。</div></div>${ICONS.file}</div><label class="upload source-upload"><input type="file" accept="application/pdf,image/*" onchange="loadConferenceSource(this.files?.[0])"><span class="upload-icon">${ICONS.file}</span><strong>PDF・画像を選択</strong><span>PDFは自動読取／読めない箇所は手動修正</span></label><div class="divider-label"><span>操作を確認する</span></div><button class="btn soft block" onclick="loadSampleConference()">解析結果のサンプルを見る</button><div class="notice" style="margin-top:12px">PDFの文字情報は端末内で解析します。画像だけのPDF・写真は文字を自動抽出できない場合があります。その場合も元資料を見ながら手入力できます。</div></section>`;
+function renderConferenceRegister(){const s=hospitalStats();if(!conferenceDraft)return `<section class="card"><div class="row between"><div><div class="section-title" style="margin-bottom:3px">学会プログラムから登録</div><div class="small">PDF・画像から、掲載順をできるだけ保ったまま単位候補を抽出します。</div></div>${ICONS.file}</div><label class="upload source-upload"><input type="file" accept="application/pdf,image/*" onchange="loadConferenceSource(this.files?.[0])"><span class="upload-icon">${ICONS.file}</span><strong>PDF・画像を選択</strong><span>PDF・画像を自動読取／読めない箇所は手動修正</span></label><div class="divider-label"><span>操作を確認する</span></div><button class="btn soft block" onclick="loadSampleConference()">解析結果のサンプルを見る</button><div class="notice" style="margin-top:12px">PDFは文字情報を端末内で解析します。画像はOCRで読み取ります（初回は少し時間がかかります）。読み取れない箇所は元資料を見ながら手動修正できます。</div></section>`;
   if(conferenceDraft.analysisPending)return `<section class="card conference-head"><div class="row between"><div><div class="kicker">ANALYZING</div><div class="section-title" style="margin-bottom:3px">${esc(conferenceDraft.name)}</div><div class="small">${esc(conferenceDraft.fileName)} を解析しています</div></div><button class="icon-text-btn" onclick="openSourceViewer()">${ICONS.eye}<span>元資料</span></button></div><div class="notice" style="margin-top:12px">${esc(conferenceDraft.analysisMessage||'PDFから文字と単位区分を読み取っています…')}</div></section>`;
   if(conferenceDraft.analysisError&&!conferenceDraft.sessions.length)return `<section class="card conference-head"><div class="row between"><div><div class="kicker">SOURCE</div><div class="section-title" style="margin-bottom:3px">${esc(conferenceDraft.name)}</div><div class="small">${esc(conferenceDraft.fileName)}</div></div><button class="icon-text-btn" onclick="openSourceViewer()">${ICONS.eye}<span>元資料</span></button></div><div class="notice" style="margin-top:12px">${esc(conferenceDraft.analysisError)}</div><button class="btn soft block" style="margin-top:10px" onclick="setRegisterMode('manual')">手入力へ</button><button class="btn ghost block" style="margin-top:8px" onclick="clearConferenceDraft()">資料を閉じる</button></section>`;
-  const selected=conferenceDraft.sessions.filter(x=>x.status==='attended');const summary=summarizeConference(selected);return `<section class="card conference-head"><div class="row between"><div><div class="kicker">CONFERENCE</div><div class="section-title" style="margin-bottom:3px">${esc(conferenceDraft.name)}</div><div class="small">${conferenceDraft.sessions.length}件・元資料と同じ並び順${conferenceDraft.autoParsed?'・PDF自動抽出':''}</div></div>${conferenceDraft.fileName?`<button class="icon-text-btn" onclick="openSourceViewer()">${ICONS.eye}<span>元資料</span></button>`:''}</div>${conferenceDraft.fileName?`<div class="source-chip">${esc(conferenceDraft.fileName)}</div>`:''}${conferenceDraft.analysisWarning?`<div class="notice" style="margin-top:10px">${esc(conferenceDraft.analysisWarning)}</div>`:''}</section><section class="card no-pad"><div class="conference-guide"><span>参加状況をタップ</span><span class="legend-dot"></span><b>アクセント色＝今の不足に関連</b></div><div class="conference-list">${conferenceDraft.sessions.map((x,i)=>renderConferenceRow(x,i,s)).join('')}</div></section><section class="card sticky-summary"><div class="row between"><div><div class="small">参加にした講演</div><strong class="summary-total">${fmt(summary.total)}単位</strong></div><div class="summary-codes">${Object.entries(summary.byCode).slice(0,5).map(([c,u])=>`<span>${c} ${fmt(u)}</span>`).join('')}${Object.keys(summary.byCode).length>5?'<span>…</span>':''}</div></div><button class="btn accent block" onclick="saveConferenceTraining()" ${selected.length?'':'disabled'}>参加した講演を一括登録</button></section>`}
+  const selected=conferenceDraft.sessions.filter(x=>x.status==='attended');const summary=summarizeConference(selected);return `<section class="card conference-head"><div class="row between"><div><div class="kicker">CONFERENCE</div><div class="section-title" style="margin-bottom:3px">${esc(conferenceDraft.name)}</div><div class="small">${conferenceDraft.sessions.length}件・元資料の順番を維持${conferenceDraft.autoParsed?'・自動抽出':''}</div></div>${conferenceDraft.fileName?`<button class="icon-text-btn" onclick="openSourceViewer()">${ICONS.eye}<span>元資料</span></button>`:''}</div>${conferenceDraft.fileName?`<div class="source-chip">${esc(conferenceDraft.fileName)}</div>`:''}${conferenceDraft.analysisWarning?`<div class="notice" style="margin-top:10px">${esc(conferenceDraft.analysisWarning)}</div>`:''}</section><section class="card no-pad"><div class="conference-guide"><span>参加状況をタップ</span><span class="legend-dot"></span><b>アクセント色＝今の不足に関連</b></div><div class="conference-list">${conferenceDraft.sessions.map((x,i)=>renderConferenceRow(x,i,s)).join('')}</div></section><section class="card sticky-summary"><div class="row between"><div><div class="small">参加にした講演</div><strong class="summary-total">${fmt(summary.total)}単位</strong></div><div class="summary-codes">${Object.entries(summary.byCode).slice(0,5).map(([c,u])=>`<span>${c} ${fmt(u)}</span>`).join('')}${Object.keys(summary.byCode).length>5?'<span>…</span>':''}</div></div><button class="btn accent block" onclick="saveConferenceTraining()" ${selected.length?'':'disabled'}>参加した講演を一括登録</button></section>`}
 
 function relevanceForSession(session,s){const codes=(session.credits||[]).map(c=>c.code).filter(Boolean);for(const c of codes){const m=s.mandatory.find(x=>x.code===c);if(m)return {label:'必須未取得',level:'high'}}for(const c of codes){const d=(c||'').split('-')[0];if(s.shortages.some(x=>x.domain===d))return {label:`${d}領域の不足`,level:'mid'}}if((session.credits||[]).some(c=>!c.code))return {label:'区分を確認',level:'check'};return null}
 function renderConferenceRow(x,i,s){const rel=relevanceForSession(x,s),credits=(x.credits||[]),needsCheck=!credits.length||credits.some(c=>!c.code||!(Number(c.unit)>0));return `<div class="conference-row ${x.status==='attended'?'is-attended':x.status==='skipped'?'is-skipped':''}"><div class="conf-order">${String(i+1).padStart(2,'0')}</div><div class="conf-main"><div class="conf-title">${esc(x.title)}</div><div class="conf-meta">${credits.length?credits.map(c=>`${c.code||'要確認'} ${Number(c.unit)>0?fmt(c.unit)+'単位':'単位要確認'}`).join(' ／ '):'単位区分 要確認'}${x.page?` ・ p.${x.page}`:''}</div><div class="conf-tags">${rel?`<span class="recommend-tag ${rel.level}">${rel.label}</span>`:''}${needsCheck?'<button class="manual-tag" onclick="editConferenceSession('+i+')">手動で確認</button>':''}</div></div><div class="conf-actions"><button class="status-btn ${x.status==='attended'?'on attended':''}" onclick="cycleConferenceStatus(${i},'attended')">参加</button><button class="status-btn ${x.status==='skipped'?'on skipped':''}" onclick="cycleConferenceStatus(${i},'skipped')">不参加</button><button class="edit-mini" onclick="editConferenceSession(${i})">編集</button></div></div>`}
 function summarizeConference(rows){const byCode={};let total=0;for(const r of rows)for(const c of r.credits||[]){total+=Number(c.unit||0);if(c.code)byCode[c.code]=(byCode[c.code]||0)+Number(c.unit||0)}return {total,byCode}}
 
-function renderHistory(){return `<section class="history-tabs"><button class="${historyMode==='timeline'?'on':''}" onclick="setHistoryMode('timeline')">研修履歴</button><button class="${historyMode==='matrix'?'on':''}" onclick="setHistoryMode('matrix')">項目別一覧</button></section>${historyMode==='timeline'?renderHistoryTimeline():renderItemMatrix()}`}
-function setHistoryMode(mode){historyMode=mode;render()}
-function renderHistoryTimeline(){const ts=[...state.trainings].sort((a,b)=>b.date.localeCompare(a.date));return ts.length?ts.map(t=>{const g=groupTrainingCredits(t);return `<section class="card history-card"><div class="row between"><div><div class="history-date">${esc(t.date)} ・ ${fy(t.date)}年度</div><div class="history-title">${esc(t.name)}</div></div><button class="btn ghost smallbtn" onclick="editTraining('${t.id}')">編集</button></div><div class="credit-tags">${Object.entries(g).map(([c,v])=>`<span class="credit-tag">${c} ${fmt(v.unit)}単位${v.count>1?`・${v.count}件`:''}</span>`).join('')}</div><div class="small" style="margin-top:10px">計 ${fmt(trainingTotal(t))}単位・${(t.creditEntries||[]).length}明細</div></section>`}).join(''):'<section class="card empty">まだ記録がありません。</section>'}
-function curriculumName(code){for(const g of CURRICULUM){const item=g.items.find(x=>x[0]===code);if(item)return item[1]}return ''}
+function renderHistory(){
+  const bulk=historyMode==='timeline'?renderHistoryBulkTools():'';
+  return `<section class="history-tabs"><button class="${historyMode==='timeline'?'on':''}" onclick="setHistoryMode('timeline')">研修履歴</button><button class="${historyMode==='matrix'?'on':''}" onclick="setHistoryMode('matrix')">項目別一覧</button></section>${bulk}${historyMode==='timeline'?renderHistoryTimeline():renderItemMatrix()}`
+}
+function setHistoryMode(mode){historyMode=mode;if(mode!=='timeline'){historySelectMode=false;selectedTrainingIds.clear()}render()}
+function renderHistoryBulkTools(){
+  if(!state.trainings.length)return '';
+  if(!historySelectMode)return `<div class="history-tools"><span class="small">${state.trainings.length}件の記録</span><button class="history-select-action" onclick="startHistorySelection()">選択</button></div>`;
+  const n=selectedTrainingIds.size;
+  return `<div class="history-tools selecting"><button class="history-select-action" onclick="toggleSelectAllTrainings()">${n===state.trainings.length?'選択解除':'すべて選択'}</button><span class="history-selected-count">${n}件選択</span><button class="history-delete-action" onclick="deleteSelectedTrainings()" ${n?'':'disabled'}>削除</button><button class="history-select-action" onclick="cancelHistorySelection()">キャンセル</button></div>`
+}
+function renderHistoryTimeline(){
+  const ts=[...state.trainings].sort((a,b)=>b.date.localeCompare(a.date));
+  return ts.length?ts.map(t=>{
+    const g=groupTrainingCredits(t),selected=selectedTrainingIds.has(t.id);
+    if(historySelectMode){
+      return `<button class="card history-card history-select-card ${selected?'selected':''}" onclick="toggleTrainingSelection('${t.id}')"><span class="history-check">${selected?'✓':''}</span><span class="history-select-body"><span class="history-date">${esc(t.date)} ・ ${fy(t.date)}年度</span><strong class="history-title">${esc(t.name)}</strong><span class="credit-tags">${Object.entries(g).map(([c,v])=>`<span class="credit-tag">${c} ${fmt(v.unit)}単位${v.count>1?`・${v.count}件`:''}</span>`).join('')}</span><span class="small" style="margin-top:8px">計 ${fmt(trainingTotal(t))}単位・${(t.creditEntries||[]).length}明細</span></span></button>`
+    }
+    return `<section class="card history-card"><div class="row between"><div><div class="history-date">${esc(t.date)} ・ ${fy(t.date)}年度</div><div class="history-title">${esc(t.name)}</div></div><button class="btn ghost smallbtn" onclick="editTraining('${t.id}')">編集</button></div><div class="credit-tags">${Object.entries(g).map(([c,v])=>`<span class="credit-tag">${c} ${fmt(v.unit)}単位${v.count>1?`・${v.count}件`:''}</span>`).join('')}</div><div class="small" style="margin-top:10px">計 ${fmt(trainingTotal(t))}単位・${(t.creditEntries||[]).length}明細</div></section>`
+  }).join(''):'<section class="card empty">まだ記録がありません。</section>'
+}
+function startHistorySelection(){historySelectMode=true;selectedTrainingIds.clear();render()}
+function cancelHistorySelection(){historySelectMode=false;selectedTrainingIds.clear();render()}
+function toggleTrainingSelection(id){
+  if(selectedTrainingIds.has(id))selectedTrainingIds.delete(id);else selectedTrainingIds.add(id);
+  render();
+}
+function toggleSelectAllTrainings(){
+  if(selectedTrainingIds.size===state.trainings.length)selectedTrainingIds.clear();
+  else selectedTrainingIds=new Set(state.trainings.map(t=>t.id));
+  render();
+}
+function deleteSelectedTrainings(){
+  const ids=new Set([...selectedTrainingIds]);
+  if(!ids.size)return;
+  const targets=state.trainings.filter(t=>ids.has(t.id));
+  const credits=targets.reduce((sum,t)=>sum+(t.creditEntries||[]).length,0);
+  if(!confirm(`${targets.length}件の研修記録（${credits}明細）を削除しますか？\nこの操作は元に戻せません。`))return;
+  const creditIds=[];
+  for(const t of targets)for(const e of (t.creditEntries||[]))creditIds.push(`${t.id}:${e.id}`);
+  state.trainings=state.trainings.filter(t=>!ids.has(t.id));
+  for(const cid of creditIds){delete state.manualAllocations[cid];delete state.confirmedAllocations[cid]}
+  if(matrixDetail&&ids.has(matrixDetail.trainingId))matrixDetail=null;
+  historySelectMode=false;selectedTrainingIds.clear();
+  saveData();render();
+}
 function trainingCodeEntries(t,code){return (t.creditEntries||[]).filter(e=>e.code===code)}
 function trainingCodeTotal(t,code){return trainingCodeEntries(t,code).reduce((s,e)=>s+Number(e.unit||0),0)}
 function itemGrandTotal(code){return state.trainings.reduce((s,t)=>s+trainingCodeTotal(t,code),0)}
@@ -282,29 +326,32 @@ async function loadConferenceSource(file){
   selectedSourceURL=URL.createObjectURL(file);
   conferenceDraft={name:file.name.replace(/\.(pdf|png|jpe?g)$/i,''),date:todayISO(),fileName:file.name,sessions:[],analysisPending:true,analysisMessage:'資料を確認しています…',analysisError:'',analysisWarning:'',autoParsed:false};
   render();
-  if(file.type!=='application/pdf'&&!/\.pdf$/i.test(file.name)){
+  const isPdf=file.type==='application/pdf'||/\.pdf$/i.test(file.name);
+  const isImage=(file.type||'').startsWith('image/')||/\.(png|jpe?g|webp|heic)$/i.test(file.name);
+  if(!isPdf&&!isImage){
     conferenceDraft.analysisPending=false;
-    conferenceDraft.analysisError='現在の自動読取はPDFの文字情報に対応しています。画像は「元資料」を見ながら手入力してください。';
+    conferenceDraft.analysisError='このファイル形式は自動読取に対応していません。PDFまたは画像を選択してください。';
     render();
     return;
   }
   try{
-    const sessions=await parseConferencePdf(file);
+    const sessions=isPdf?await parseConferencePdf(file):await parseConferenceImage(file);
     if(!conferenceDraft)return;
     conferenceDraft.analysisPending=false;
     conferenceDraft.sessions=sessions;
     conferenceDraft.autoParsed=true;
     const unresolved=sessions.filter(x=>!(x.credits||[]).length||(x.credits||[]).some(c=>!c.code||!(Number(c.unit)>0))).length;
-    conferenceDraft.analysisWarning=unresolved?`${sessions.length}件を抽出しました。うち${unresolved}件は単位区分または単位数を手動で確認してください。`:`${sessions.length}件をPDFから抽出しました。登録前に元資料との一致を確認してください。`;
+    const pageNote=isPdf&&conferenceDraft.detectedUnitPages?.length?` 単位情報ページ: ${conferenceDraft.detectedUnitPages.join('・')}ページ。`:'';
+    conferenceDraft.analysisWarning=unresolved?`${sessions.length}件を抽出しました。${pageNote}うち${unresolved}件は単位区分または単位数を手動で確認してください。`:`${sessions.length}件を${isPdf?'PDF':'画像'}から抽出しました。${pageNote}登録前に元資料との一致を確認してください。`;
     if(!sessions.length){
-      conferenceDraft.analysisError='単位情報を自動抽出できませんでした。画像スキャン形式のPDF、または表の文字情報を取得できないPDFの可能性があります。元資料を見ながら手入力してください。';
+      conferenceDraft.analysisError=isPdf?'単位情報を自動抽出できませんでした。画像スキャン形式のPDF、または表の文字情報を取得できないPDFの可能性があります。元資料を見ながら手入力してください。':'画像から単位情報を自動抽出できませんでした。元資料を見ながら手入力してください。';
     }
     render();
   }catch(err){
-    console.error('PDF解析エラー',err);
+    console.error('資料解析エラー',err);
     if(!conferenceDraft)return;
     conferenceDraft.analysisPending=false;
-    conferenceDraft.analysisError='PDFを解析できませんでした。元資料を開いて確認しながら手入力できます。';
+    conferenceDraft.analysisError='資料を解析できませんでした。元資料を開いて確認しながら手入力できます。';
     render();
   }
 }
@@ -318,21 +365,59 @@ function normalizePdfCode(raw=''){
   return ITEM_CODES.includes(code)?code:'';
 }
 
+function normalizeSourceText(text=''){
+  return String(text).normalize('NFKC')
+    .replace(/Ⅰ/g,'I').replace(/Ⅱ/g,'II').replace(/Ⅲ/g,'III').replace(/Ⅳ/g,'IV').replace(/Ⅴ/g,'V')
+    .replace(/[−‐‑‒–—―ー]/g,'-')
+    .replace(/(IV|III|II|V|I)\s*[|｜:]\s*([1-6])/gi,'$1-$2')
+    .replace(/(IV|III|II|V|I)\s*-\s*([1-6])/gi,'$1-$2')
+    .replace(/\s+/g,' ').trim();
+}
+
 function extractCreditsFromPdfText(text=''){
-  const codeRe=/(Ⅰ|Ⅱ|Ⅲ|Ⅳ|Ⅴ|IV|III|II|V|I)\s*[-－–—ー]\s*([1-6])/gi;
+  text=normalizeSourceText(text);
+  const codeRe=/(IV|III|II|V|I)\s*[-]\s*([1-6])/gi;
   const found=[];let m;
   while((m=codeRe.exec(text))){
     const code=normalizePdfCode(`${m[1]}-${m[2]}`);
     if(code)found.push({code,start:m.index,end:codeRe.lastIndex});
   }
   if(!found.length)return [];
-  return found.map((f,i)=>{
+
+  // Explicit unit labels may appear before OR after the curriculum code in tables.
+  const unitRe=/(0\.5|1(?:\.0)?|1\.5|2(?:\.0)?|2\.5|3(?:\.0)?)\s*(?:単位|unit)/gi;
+  const units=[];
+  while((m=unitRe.exec(text)))units.push({unit:Number(m[1]),start:m.index,end:unitRe.lastIndex,used:false});
+
+  const out=found.map((f,i)=>{
     const end=i+1<found.length?found[i+1].start:text.length;
-    const seg=text.slice(f.end,end);
-    let um=seg.match(/(?:^|[^0-9])(0\.5|1(?:\.0)?|1\.5|2(?:\.0)?|2\.5|3(?:\.0)?)\s*(?:単位|unit)/i);
-    if(!um)um=seg.slice(0,24).match(/(?:^|\s)(0\.5|1(?:\.0)?|1\.5|2(?:\.0)?|2\.5|3(?:\.0)?)(?=\s|$)/);
-    return {code:f.code,unit:um?Number(um[1]):null};
+    const after=text.slice(f.end,end);
+    let um=after.match(/(?:^|[^0-9])(0\.5|1(?:\.0)?|1\.5|2(?:\.0)?|2\.5|3(?:\.0)?)\s*(?:単位|unit)/i);
+    if(!um)um=after.slice(0,24).match(/(?:^|\s)(0\.5|1(?:\.0)?|1\.5|2(?:\.0)?|2\.5|3(?:\.0)?)(?=\s|$)/);
+    return {code:f.code,unit:um?Number(um[1]):null,_pos:(f.start+f.end)/2};
   });
+
+  // Fill missing units from the nearest explicit 'x単位' token, including tokens on the left.
+  for(const row of out){
+    if(Number(row.unit)>0)continue;
+    let best=null,bestD=Infinity;
+    for(const u of units){
+      if(u.used)continue;
+      const d=Math.abs(((u.start+u.end)/2)-row._pos);
+      if(d<bestD){best=u;bestD=d}
+    }
+    if(best && (found.length===1 || bestD<60)){
+      row.unit=best.unit;best.used=true;
+    }
+  }
+
+  // If counts match, table order is a reliable final fallback.
+  const missing=out.filter(x=>!(Number(x.unit)>0));
+  const unused=units.filter(x=>!x.used);
+  if(missing.length && missing.length===unused.length){
+    missing.forEach((x,i)=>{x.unit=unused[i].unit;unused[i].used=true});
+  }
+  return out.map(({_pos,...x})=>x);
 }
 
 function cleanPdfSessionTitle(text=''){
@@ -349,68 +434,200 @@ function pdfLineLooksLikeOnlyUnits(text=''){
   return /^(?:(?:0\.5|1(?:\.0)?|1\.5|2(?:\.0)?|2\.5|3(?:\.0)?)\s*(?:単位)?[\s/／・,，]*)+$/.test(t);
 }
 
+function pdfPageScore(text=''){
+  const t=normalizeSourceText(text);
+  let score=0;
+  if(/単位に関するご案内/.test(t))score+=120;
+  if(/研修項目/.test(t))score+=35;
+  if(/病院薬学単位\s*[・･]?\s*研修科目/.test(t))score+=35;
+  if(/単位数\s*[:：]?.*単位/.test(t))score+=25;
+  if(/日病薬病院薬学認定薬剤師制度/.test(t))score+=12;
+  if(/単位付与の対象外/.test(t))score+=8;
+  const codes=(t.match(/(?:IV|III|II|V|I)\s*-\s*[1-6]/g)||[]).length;
+  score+=Math.min(45,codes*4);
+  return score;
+}
+function pdfPageHasUnitTable(text=''){
+  const t=normalizeSourceText(text);
+  const codes=(t.match(/(?:IV|III|II|V|I)\s*-\s*[1-6]/g)||[]).length;
+  return /研修項目/.test(t)||/病院薬学単位\s*[・･]?\s*研修科目/.test(t)||(/単位数\s*[:：]?.*単位/.test(t)&&codes>=1)||codes>=3;
+}
+function pdfItemsToLines(items,pageNo){
+  const positioned=(items||[]).filter(it=>String(it.str||'').trim()).map(it=>({text:String(it.str).trim(),x:Number(it.transform?.[4]||0),y:Number(it.transform?.[5]||0),w:Number(it.width||0)}));
+  positioned.sort((a,b)=>Math.abs(b.y-a.y)>2?b.y-a.y:a.x-b.x);
+  const groups=[];
+  for(const it of positioned){
+    let g=groups.find(row=>Math.abs(row.y-it.y)<=2.2);
+    if(!g){g={y:it.y,items:[]};groups.push(g)}
+    g.items.push(it);
+  }
+  groups.sort((a,b)=>b.y-a.y);
+  const lines=[];
+  for(const g of groups){
+    g.items.sort((a,b)=>a.x-b.x);
+    let line='',lastEnd=null;
+    for(const it of g.items){
+      const gap=lastEnd===null?0:it.x-lastEnd;
+      if(line&&gap>2.5)line+=' ';
+      line+=it.text;
+      lastEnd=it.x+it.w;
+    }
+    line=normalizeSourceText(line);
+    if(line)lines.push({page:pageNo,text:line});
+  }
+  return lines;
+}
 async function pdfTextLines(file){
   if(!window.pdfjsLib)throw new Error('PDF.js unavailable');
   window.pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
   const data=await file.arrayBuffer();
   const pdf=await window.pdfjsLib.getDocument({data}).promise;
-  const all=[];
+  const candidatePages=[];
+  let guidePage=null,tableStarted=false,lowAfterTable=0;
+  let fallback=[];
   for(let pageNo=1;pageNo<=pdf.numPages;pageNo++){
-    if(conferenceDraft){conferenceDraft.analysisMessage=`PDF ${pageNo} / ${pdf.numPages}ページを解析しています…`;render();}
+    if(conferenceDraft){conferenceDraft.analysisMessage=`単位情報のページを探しています… ${pageNo} / ${pdf.numPages}`;render()}
     const page=await pdf.getPage(pageNo);
     const content=await page.getTextContent();
-    const items=(content.items||[]).filter(it=>String(it.str||'').trim()).map(it=>({text:String(it.str).trim(),x:Number(it.transform?.[4]||0),y:Number(it.transform?.[5]||0),w:Number(it.width||0)}));
-    items.sort((a,b)=>Math.abs(b.y-a.y)>2?b.y-a.y:a.x-b.x);
-    const groups=[];
-    for(const it of items){
-      let g=groups.find(row=>Math.abs(row.y-it.y)<=2.2);
-      if(!g){g={y:it.y,items:[]};groups.push(g)}
-      g.items.push(it);
-    }
-    groups.sort((a,b)=>b.y-a.y);
-    for(const g of groups){
-      g.items.sort((a,b)=>a.x-b.x);
-      let line='',lastEnd=null;
-      for(const it of g.items){
-        const gap=lastEnd===null?0:it.x-lastEnd;
-        if(line&&gap>2.5)line+=' ';
-        line+=it.text;
-        lastEnd=it.x+it.w;
+    const flat=normalizeSourceText((content.items||[]).map(it=>String(it.str||'')).join(' '));
+    const score=pdfPageScore(flat),isTable=pdfPageHasUnitTable(flat),isGuide=/単位に関するご案内/.test(flat);
+    const lines=pdfItemsToLines(content.items||[],pageNo);
+    if(score>=35)fallback.push({page:pageNo,score,lines});
+    if(guidePage===null&&isGuide){guidePage=pageNo;candidatePages.push({page:pageNo,score,lines});continue}
+    if(guidePage!==null){
+      // Unit tables are normally placed immediately after the unit guidance page.
+      if(pageNo>guidePage){
+        if(isTable||score>=25||pageNo<=guidePage+2){candidatePages.push({page:pageNo,score,lines})}
+        if(isTable){tableStarted=true;lowAfterTable=0}
+        else if(tableStarted)lowAfterTable++;
+        // After unit tables end, avoid parsing the remaining abstract pages.
+        if(tableStarted&&lowAfterTable>=2)break;
+        if(pageNo-guidePage>=12)break;
       }
-      line=line.replace(/\s+/g,' ').trim();
-      if(line)all.push({page:pageNo,text:line});
     }
   }
-  return all;
+  let chosen=candidatePages;
+  if(!chosen.length)chosen=fallback.sort((a,b)=>a.page-b.page);
+  if(!chosen.length){
+    // No clear unit pages found. Returning no rows is safer than treating abstract text as units.
+    return [];
+  }
+  const pages=[...new Set(chosen.map(x=>x.page))].sort((a,b)=>a-b);
+  if(conferenceDraft){conferenceDraft.detectedUnitPages=pages;conferenceDraft.analysisMessage=`単位情報ページ（${pages.join('・')}ページ）を優先解析しています…`;render()}
+  return chosen.sort((a,b)=>a.page-b.page).flatMap(x=>x.lines);
 }
 
 async function parseConferencePdf(file){
   const lines=await pdfTextLines(file);
-  const sessions=[];
-  let order=0;
-  for(let i=0;i<lines.length;i++){
-    const line=lines[i];
-    let credits=extractCreditsFromPdfText(line.text);
-    if(!credits.length)continue;
-    if(credits.some(c=>!(Number(c.unit)>0))){
-      const next=lines[i+1];
-      if(next&&next.page===line.page&&pdfLineLooksLikeOnlyUnits(next.text)){
-        const units=(next.text.match(/0\.5|1(?:\.0)?|1\.5|2(?:\.0)?|2\.5|3(?:\.0)?/g)||[]).map(Number);
-        credits=credits.map((c,j)=>({...c,unit:Number(c.unit)>0?c.unit:(units[j]||null)}));
+  return parseConferenceLines(lines);
+}
+
+function ocrTextToLines(text=''){
+  return String(text).split(/\r?\n/).map((t,i)=>({page:1,text:normalizeSourceText(t),_i:i})).filter(x=>x.text);
+}
+
+async function parseConferenceImage(file){
+  if(!window.Tesseract)throw new Error('画像OCRライブラリを読み込めませんでした');
+  const result=await window.Tesseract.recognize(file,'jpn+eng',{
+    logger:m=>{
+      if(!conferenceDraft)return;
+      if(m.status==='recognizing text'){
+        conferenceDraft.analysisMessage=`画像を読み取っています… ${Math.round((m.progress||0)*100)}%`;
+        render();
+      }else if(m.status){
+        conferenceDraft.analysisMessage='画像OCRを準備しています…';
+        render();
       }
     }
-    let title=cleanPdfSessionTitle(line.text);
-    if(title.length<4){
-      const prev=lines[i-1];
-      if(prev&&prev.page===line.page&&!extractCreditsFromPdfText(prev.text).length&&!pdfLineLooksLikeOnlyUnits(prev.text))title=prev.text;
-    }
-    if(title.length>180)title=title.slice(0,177)+'…';
-    if(!title)title=`PDF ${line.page}ページの単位対象講演`;
-    order++;
-    sessions.push({title,page:line.page,credits,status:'undecided',sourceOrder:order,rawText:line.text});
-  }
-  return sessions;
+  });
+  const raw=result?.data?.text||'';
+  return parseConferenceLines(ocrTextToLines(raw));
 }
+
+function sectionDefaultUnitFromText(text=''){
+  const t=normalizeSourceText(text);
+  // Examples: 「単位数：各 1 単位」「単位数: 各0.5単位」
+  let m=t.match(/単位数\s*[:：]?\s*(?:各\s*)?(0\.5|1(?:\.0)?|1\.5|2(?:\.0)?|2\.5|3(?:\.0)?)\s*単位/i);
+  if(m)return Number(m[1]);
+  // Some programs omit 「単位数」 but write 「各 1 単位」 in the section heading.
+  m=t.match(/(?:^|\s)各\s*(0\.5|1(?:\.0)?|1\.5|2(?:\.0)?|2\.5|3(?:\.0)?)\s*単位(?:\s|$)/i);
+  return m?Number(m[1]):null;
+}
+
+function looksLikeConferenceSectionHeading(text=''){
+  const t=normalizeSourceText(text);
+  return /(?:^|\s)[1-5]\s*[.．]\s*(?:特別講演|シンポジウム|ブロック学術大会|その他)/.test(t)
+    || /(?:特別講演|シンポジウム).*(?:各\s*\d+\s*(?:-|～|~)?\s*\d*\s*分)/.test(t);
+}
+
+function isPdfTableNoise(text=''){
+  const t=normalizeSourceText(text);
+  return /^(?:No|演者|担当|テーマ|研修項目|上段|下段|病院薬学単位|専門薬剤師単位)/i.test(t)
+    || /^\d+\s*単位\s*(?:がん|感染制御|精神科|妊婦|授乳婦|HIV)/i.test(t)
+    || pdfLineLooksLikeOnlyUnits(t);
+}
+function inferPdfSessionTitle(lines,index,currentText=''){
+  const direct=cleanPdfSessionTitle(currentText)
+    .replace(/^[①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳㉑㉒㉓㉔㉕㉖㉗㉘㉙㉚\d\s.．-]+/,'').trim();
+  if(direct.length>=7&&!isPdfTableNoise(direct))return direct.slice(0,180);
+  const page=lines[index]?.page,parts=[];
+  for(let j=index-1;j>=0&&j>=index-4;j--){
+    const prev=lines[j];if(!prev||prev.page!==page)break;
+    if(looksLikeConferenceSectionHeading(prev.text)||extractCreditsFromPdfText(prev.text).length)break;
+    if(isPdfTableNoise(prev.text))continue;
+    let p=cleanPdfSessionTitle(prev.text).replace(/^[①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳㉑㉒㉓㉔㉕㉖㉗㉘㉙㉚\d\s.．-]+/,'').trim();
+    if(p&&p.length>2)parts.unshift(p);
+  }
+  const joined=parts.join(' ').replace(/\s+/g,' ').trim();
+  return (joined||direct||`資料 ${page||1}ページの単位対象講演`).slice(0,180);
+}
+function parseConferenceLines(lines){
+  const sessions=[];let order=0;
+  let activePage=null;
+  let sectionDefaultUnit=null;
+  for(let i=0;i<lines.length;i++){
+    const line=lines[i];
+    if(activePage!==line.page){activePage=line.page;sectionDefaultUnit=null}
+
+    const headingDefault=sectionDefaultUnitFromText(line.text);
+    if(looksLikeConferenceSectionHeading(line.text))sectionDefaultUnit=headingDefault;
+    else if(headingDefault!==null)sectionDefaultUnit=headingDefault;
+
+    let credits=extractCreditsFromPdfText(line.text);
+    if(!credits.length)continue;
+
+    // Unit tokens sometimes become a separate line immediately before/after the curriculum code.
+    if(credits.some(c=>!(Number(c.unit)>0))){
+      const neighbors=[lines[i-2],lines[i-1],lines[i+1],lines[i+2]].filter(x=>x&&x.page===line.page);
+      for(const near of neighbors){
+        const t=normalizeSourceText(near.text);
+        const units=(t.match(/(?:0\.5|1(?:\.0)?|1\.5|2(?:\.0)?|2\.5|3(?:\.0)?)(?=\s*単位)/g)||[]).map(Number);
+        if(units.length){credits=credits.map((c,j)=>({...c,unit:Number(c.unit)>0?c.unit:(units[Math.min(j,units.length-1)]||null)}));if(credits.every(c=>Number(c.unit)>0))break}
+      }
+    }
+
+    // Header-level rules such as 「単位数：各1単位」 apply to every row in that section.
+    // Explicit row-level values (e.g. II-4 0.5 + II-5 0.5) always win.
+    if(sectionDefaultUnit!==null&&credits.some(c=>!(Number(c.unit)>0))){
+      credits=credits.map(c=>({...c,unit:Number(c.unit)>0?c.unit:sectionDefaultUnit}));
+    }
+
+    const title=inferPdfSessionTitle(lines,i,line.text);
+    order++;
+    sessions.push({title,page:line.page||1,credits,status:'undecided',sourceOrder:order,rawText:line.text});
+  }
+
+  // Merge accidental duplicate rows from PDF text-layer fragmentation, while preserving source order.
+  const merged=[];
+  for(const s of sessions){
+    const signature=(s.credits||[]).map(c=>`${c.code}:${Number(c.unit||0)}`).join('|');
+    const prev=merged[merged.length-1];
+    if(prev&&prev.page===s.page&&signature&&signature===(prev.credits||[]).map(c=>`${c.code}:${Number(c.unit||0)}`).join('|')&&prev.title===s.title)continue;
+    merged.push(s);
+  }
+  return merged.map((s,i)=>({...s,sourceOrder:i+1}));
+}
+
 function loadSampleConference(){conferenceDraft={name:'学会プログラム（解析サンプル）',date:todayISO(),fileName:'',sessions:sampleConferenceSessions(),analysisPending:false};render()}
 function clearConferenceDraft(){conferenceDraft=null;selectedSourceFile=null;if(selectedSourceURL)URL.revokeObjectURL(selectedSourceURL);selectedSourceURL='';render()}
 function sampleConferenceSessions(){return [

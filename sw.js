@@ -1,4 +1,4 @@
-const CACHE='pharm-cert-v1.1.0';
+const CACHE='pharm-cert-v1.4.0';
 const ASSETS=['./','./index.html','./styles.css','./app.js','./manifest.webmanifest','./icon-192.png','./icon-512.png'];
 
 self.addEventListener('install',event=>{

@@ -181,3 +181,19 @@ html[data-palette="teal"] body.darkmode{
 .app-info-title{margin-top:14px!important}
 .settings-info-row{display:flex;align-items:center;justify-content:space-between;padding:10px 3px;border-bottom:1px solid var(--line);font-size:12px;color:var(--muted)}
 .settings-info-row strong{font-size:12px;color:var(--ink);font-weight:650}
+
+
+/* v1.4: 履歴の複数選択・一括削除 */
+.history-tools{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:-2px 2px 10px;padding:0 2px;min-height:30px}
+.history-tools.selecting{justify-content:flex-start;flex-wrap:wrap}
+.history-select-action,.history-delete-action{border:0;background:transparent;padding:6px 4px;font-size:11.5px;font-weight:760;color:var(--muted)}
+.history-delete-action{color:var(--accent);margin-left:auto}.history-delete-action:disabled{opacity:.35}
+.history-selected-count{font-size:11px;font-weight:760;color:var(--ink)}
+.history-select-card{width:100%;border:1px solid var(--line);background:var(--card);color:var(--ink);text-align:left;display:grid;grid-template-columns:26px 1fr;gap:9px;align-items:start;cursor:pointer}
+.history-select-card.selected{border-color:var(--accent);background:var(--soft)}
+.history-check{width:22px;height:22px;border:1.5px solid var(--line);border-radius:50%;display:grid;place-items:center;font-size:12px;font-weight:900;color:#fff;margin-top:2px}
+.history-select-card.selected .history-check{background:var(--accent);border-color:var(--accent)}
+.history-select-body{display:flex;flex-direction:column;min-width:0}.history-select-body .credit-tags{display:flex}
+.darkmode .history-select-card{background:#181818}.darkmode .history-select-card.selected{background:#251b1e}
+html[data-palette="teal"] .history-select-card.selected{background:#f1f8f7}
+.darkmode[data-palette="teal"] .history-select-card.selected{background:#142422}

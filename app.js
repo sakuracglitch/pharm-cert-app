@@ -1,9 +1,10 @@
-const APP_VERSION='1.5.0';
-const SCHEMA_VERSION=8;
+const APP_VERSION='1.6.0';
+const SCHEMA_VERSION=9;
 const LEGACY_STORAGE_KEY='pharm-cert-pwa-data';
 const DB_NAME='pharm-cert-pwa';
-const DB_VERSION=1;
+const DB_VERSION=2;
 const DB_STORE='kv';
+const DB_FILE_STORE='files';
 const DB_STATE_KEY='state';
 let storageBackend='indexeddb';
 let saveQueue=Promise.resolve();
@@ -42,7 +43,7 @@ const ICONS={
 const defaultData=()=>({
   schemaVersion:SCHEMA_VERSION,appVersion:APP_VERSION,
   settings:{hopess:false,dark:false,theme:'burgundy',practiceStartDate:'',selectedQualificationId:'jshp-hospital',qualificationPlans:{'jshp-hospital':{startFiscalYear:2026}}},
-  qualifications:[HOSPITAL_CERT],trainings:[],confirmedAllocations:{},manualAllocations:{},lastBackupAt:null
+  qualifications:[HOSPITAL_CERT],trainings:[],conferences:[],confirmedAllocations:{},manualAllocations:{},lastBackupAt:null
 });
 
 let state=defaultData();
@@ -60,6 +61,7 @@ let selectedSourceFile=null;
 let selectedSourceURL='';
 let sourceViewerOpen=false;
 let editConferenceIndex=null;
+let manualSourceConferenceId=null;
 
 function freshDraft(){return {date:todayISO(),name:'',source:'jshp',cpc:false,hopessId:'',memo:'',files:[],creditEntries:[]}}
 function todayISO(){const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`}
@@ -78,6 +80,7 @@ function currentQualification(){return state.qualifications.find(q=>q.id===state
 function isHospitalQualification(q=currentQualification()){return q.id===HOSPITAL_CERT.id}
 function requirementLabel(k){return ({credits:'単位',experience:'実務経験',cases:'症例',paper:'論文',presentation:'学会発表',exam:'試験',membership:'会員・基礎資格'})[k]||k}
 function normalizeTraining(t){if(Array.isArray(t.creditEntries))return {...t,creditEntries:t.creditEntries.map(e=>({...e,id:e.id||uid(),unit:Number(e.unit||0)}))};return {...t,creditEntries:Object.entries(t.credits||{}).map(([code,unit])=>({id:uid(),code,unit:Number(unit),title:''}))}}
+function normalizeConferenceRecord(c){const x={...c};x.id=x.id||uid();x.sourceId=x.sourceId||'';x.sourceType=x.sourceType||'';x.fileName=x.fileName||'';x.name=x.name||x.fileName||'学会プログラム';x.date=x.date||todayISO();x.sessions=(x.sessions||[]).map((s,i)=>({...s,sourceOrder:s.sourceOrder||i+1,status:s.status||'undecided',credits:(s.credits||[]).map(v=>({...v,unit:Number(v.unit||0)}))}));x.analysisPending=false;x.createdAt=x.createdAt||new Date().toISOString();x.updatedAt=x.updatedAt||x.createdAt;return x}
 function migrateData(raw){
   let d=raw&&typeof raw==='object'?JSON.parse(JSON.stringify(raw)):defaultData();
   d.settings={hopess:false,dark:false,theme:'burgundy',practiceStartDate:'',selectedQualificationId:'jshp-hospital',qualificationPlans:{'jshp-hospital':{startFiscalYear:2026}},...(d.settings||{})};
@@ -85,6 +88,7 @@ function migrateData(raw){
   d.qualifications=d.qualifications?.length?d.qualifications:[HOSPITAL_CERT];
   d.qualifications=d.qualifications.map(q=>q.id==='jshp-hospital'?{...HOSPITAL_CERT,...q}:q);
   d.trainings=(d.trainings||[]).map(normalizeTraining);
+  d.conferences=(d.conferences||[]).map(normalizeConferenceRecord);
   d.confirmedAllocations=d.confirmedAllocations||{};
   d.manualAllocations=d.manualAllocations||{};
   d.lastBackupAt=d.lastBackupAt||null;
@@ -96,7 +100,7 @@ function openAppDB(){
   return new Promise((resolve,reject)=>{
     if(!('indexedDB' in window))return reject(new Error('IndexedDB unavailable'));
     const req=indexedDB.open(DB_NAME,DB_VERSION);
-    req.onupgradeneeded=()=>{const db=req.result;if(!db.objectStoreNames.contains(DB_STORE))db.createObjectStore(DB_STORE)};
+    req.onupgradeneeded=()=>{const db=req.result;if(!db.objectStoreNames.contains(DB_STORE))db.createObjectStore(DB_STORE);if(!db.objectStoreNames.contains(DB_FILE_STORE))db.createObjectStore(DB_FILE_STORE)};
     req.onsuccess=()=>resolve(req.result);
     req.onerror=()=>reject(req.error||new Error('IndexedDB open failed'));
   });
@@ -111,6 +115,10 @@ async function idbSet(key,value){
   try{return await new Promise((resolve,reject)=>{const tx=db.transaction(DB_STORE,'readwrite');tx.objectStore(DB_STORE).put(value,key);tx.oncomplete=()=>resolve();tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error||new Error('IndexedDB write aborted'))})}
   finally{db.close()}
 }
+async function idbFileSet(key,value){const db=await openAppDB();try{return await new Promise((resolve,reject)=>{const tx=db.transaction(DB_FILE_STORE,'readwrite');tx.objectStore(DB_FILE_STORE).put(value,key);tx.oncomplete=()=>resolve();tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error||new Error('IndexedDB file write aborted'))})}finally{db.close()}}
+async function idbFileGet(key){const db=await openAppDB();try{return await new Promise((resolve,reject)=>{const tx=db.transaction(DB_FILE_STORE,'readonly');const req=tx.objectStore(DB_FILE_STORE).get(key);req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error)})}finally{db.close()}}
+async function idbFileDelete(key){const db=await openAppDB();try{return await new Promise((resolve,reject)=>{const tx=db.transaction(DB_FILE_STORE,'readwrite');tx.objectStore(DB_FILE_STORE).delete(key);tx.oncomplete=()=>resolve();tx.onerror=()=>reject(tx.error)})}finally{db.close()}}
+
 async function loadData(){
   let raw=null;
   try{raw=await idbGet(DB_STATE_KEY);storageBackend='indexeddb'}catch(err){storageBackend='localStorage';console.warn('IndexedDBを利用できないためローカル保存へ切り替えます。',err)}
@@ -200,23 +208,27 @@ function renderHome(){const q=currentQualification();if(!isHospitalQualification
 function renderCustomQualificationHome(q){const reqs=Object.entries(q.requirementTypes||{}).filter(([,v])=>v);return `<section class="compact-target"><div><span class="muted-label">TARGET</span><strong>${esc(q.name)}</strong></div><div class="target-year">要件未設定</div></section><section class="card shortage-card"><div class="kicker">NOW</div><h2>現在の不足</h2><div class="notice">この資格の公式テンプレートを追加すると、ここに単位・実務経験・症例・論文・学会発表などの不足だけを表示します。</div></section><section class="card"><div class="section-title">管理する要件</div>${reqs.map(([k])=>`<div class="metric"><span>${requirementLabel(k)}</span><strong>未設定</strong></div>`).join('')}</section>`}
 
 function renderRegister(){if(!isHospitalQualification())return `<section class="card"><div class="section-title">${esc(currentQualification().name)} の記録</div><div class="notice">この資格の公式要件テンプレートはまだ未設定です。</div></section>`;return `<section class="record-switch"><button class="${registerMode==='manual'?'on':''}" onclick="setRegisterMode('manual')">手入力</button><button class="${registerMode==='conference'?'on':''}" onclick="setRegisterMode('conference')">学会プログラム</button></section>${registerMode==='manual'?renderManualRegister():renderConferenceRegister()}`}
-function renderManualRegister(){const bulk=editingId?renderCreditBulkEditor():'';return `<section class="card"><div class="field"><label>取得日</label><input class="input" type="date" value="${regDraft.date}" onchange="regDraft.date=this.value"></div><div class="field"><label>研修名</label><input class="input" value="${esc(regDraft.name)}" placeholder="研修会・学会名" onchange="regDraft.name=this.value"></div>${bulk}<div class="row between"><div><div class="section-title" style="margin-bottom:2px">取得項目</div><div class="small">受けた分だけ追加。合計は自動計算します。</div></div><span class="pill accent">${fmt(draftTotal())}単位</span></div>${CURRICULUM.map(renderDomain).join('')}<button class="btn accent block" style="margin-top:16px" onclick="saveTraining()">${editingId?'変更を保存':'登録する'}</button>${editingId?'<button class="btn ghost block" style="margin-top:8px" onclick="cancelEdit()">キャンセル</button>':''}</section>`}
+function renderManualRegister(){const bulk=editingId?renderCreditBulkEditor():'';const sourceRef=renderManualSourceReference();return `${sourceRef}<section class="card"><div class="field"><label>取得日</label><input class="input" type="date" value="${regDraft.date}" onchange="regDraft.date=this.value"></div><div class="field"><label>研修名</label><input class="input" value="${esc(regDraft.name)}" placeholder="研修会・学会名" onchange="regDraft.name=this.value"></div>${bulk}<div class="row between"><div><div class="section-title" style="margin-bottom:2px">取得項目</div><div class="small">受けた分だけ追加。合計は自動計算します。</div></div><span class="pill accent">${fmt(draftTotal())}単位</span></div>${CURRICULUM.map(renderDomain).join('')}<button class="btn accent block" style="margin-top:16px" onclick="saveTraining()">${editingId?'変更を保存':'登録する'}</button>${editingId?'<button class="btn ghost block" style="margin-top:8px" onclick="cancelEdit()">キャンセル</button>':''}</section>`}
 function renderCreditBulkEditor(){const entries=regDraft.creditEntries||[];if(!entries.length)return '';if(!creditSelectMode)return `<div class="credit-bulk-head"><span><strong>登録済み単位</strong><small>${entries.length}明細</small></span><button onclick="startCreditSelection()">選択して削除</button></div>`;const n=selectedCreditEntryIds.size;return `<div class="credit-bulk-box"><div class="credit-bulk-toolbar"><button onclick="toggleSelectAllCredits()">${n===entries.length?'選択解除':'すべて選択'}</button><strong>${n}件選択</strong><button class="danger" onclick="deleteSelectedCredits()" ${n?'':'disabled'}>削除</button><button onclick="cancelCreditSelection()">キャンセル</button></div><div class="credit-bulk-list">${entries.map(e=>{const on=selectedCreditEntryIds.has(e.id);return `<button class="credit-bulk-row ${on?'selected':''}" onclick="toggleCreditSelection('${e.id}')"><span class="credit-check">${on?'✓':''}</span><span><strong>${esc(e.code||'要確認')} ${fmt(e.unit)}単位</strong>${e.title?`<small>${esc(e.title)}</small>`:''}</span></button>`}).join('')}</div></div>`}
 function startCreditSelection(){creditSelectMode=true;selectedCreditEntryIds.clear();render()}
 function cancelCreditSelection(){creditSelectMode=false;selectedCreditEntryIds.clear();render()}
 function toggleCreditSelection(id){if(selectedCreditEntryIds.has(id))selectedCreditEntryIds.delete(id);else selectedCreditEntryIds.add(id);render()}
 function toggleSelectAllCredits(){const entries=regDraft.creditEntries||[];if(selectedCreditEntryIds.size===entries.length)selectedCreditEntryIds.clear();else selectedCreditEntryIds=new Set(entries.map(e=>e.id));render()}
 function deleteSelectedCredits(){const n=selectedCreditEntryIds.size;if(!n)return;if(!confirm(`${n}件の単位明細を削除しますか？`))return;regDraft.creditEntries=(regDraft.creditEntries||[]).filter(e=>!selectedCreditEntryIds.has(e.id));selectedCreditEntryIds.clear();creditSelectMode=false;render()}
+function renderManualSourceReference(){if(!manualSourceConferenceId)return '';const c=(conferenceDraft&&conferenceDraft.id===manualSourceConferenceId)?conferenceDraft:state.conferences.find(x=>x.id===manualSourceConferenceId);if(!c)return '';const isImage=(c.sourceType||'').startsWith('image/');if(isImage&&selectedSourceURL)return `<section class="manual-source-reference"><div class="manual-source-head"><div><strong>参照画像</strong><span>${esc(c.fileName||'アップロード画像')}</span></div><button class="icon-text-btn" onclick="openSourceViewer()">${ICONS.eye}<span>拡大</span></button></div><div class="manual-source-image"><img src="${selectedSourceURL}" alt="参照画像"></div></section>`;return `<section class="card manual-source-file"><div><strong>元資料を見ながら入力</strong><div class="small">${esc(c.fileName||'元資料')}</div></div><button class="icon-text-btn" onclick="openSourceViewer()">${ICONS.eye}<span>元資料</span></button></section>`}
 function renderDomain(g){return `<details class="domain" data-domain="${g.domain}" ${g.domain==='I'?'open':''}><summary><span>${g.domain}. ${g.title}</span><span>${g.items.reduce((a,[c])=>a+draftCodeTotal(c),0)?fmt(g.items.reduce((a,[c])=>a+draftCodeTotal(c),0))+'単位':'＋'}</span></summary>${g.items.map(([c,n])=>renderItemRow(c,n)).join('')}</details>`}
 function renderItemRow(code,name){const entries=draftEntries(code),total=draftCodeTotal(code);return `<div class="item-row multi"><div class="row between item-heading"><div><div class="item-code">${code}</div><div class="item-name">${name}</div></div>${total?`<span class="item-total">${fmt(total)}単位</span>`:''}</div><div class="add-unit-btns"><button onclick="addCredit('${code}',0.5)">＋0.5</button><button onclick="addCredit('${code}',1)">＋1.0</button><button class="custom-unit" onclick="addCustomCredit('${code}')">単位を手入力</button></div>${entries.length?`<div class="entry-chips">${entries.map(e=>`<button class="entry-chip" onclick="removeCredit('${e.id}')"><span>${fmt(e.unit)}</span><small>単位</small><b>×</b></button>`).join('')}</div>`:''}</div>`}
 
-function renderConferenceRegister(){const s=hospitalStats();if(!conferenceDraft)return `<section class="card"><div class="row between"><div><div class="section-title" style="margin-bottom:3px">学会プログラムから登録</div><div class="small">PDF・画像から、掲載順をできるだけ保ったまま単位候補を抽出します。</div></div>${ICONS.file}</div><label class="upload source-upload"><input type="file" accept="application/pdf,image/*" onchange="loadConferenceSource(this.files?.[0])"><span class="upload-icon">${ICONS.file}</span><strong>PDF・画像を選択</strong><span>PDF・画像を自動読取／読めない箇所は手動修正</span></label><div class="divider-label"><span>操作を確認する</span></div><button class="btn soft block" onclick="loadSampleConference()">解析結果のサンプルを見る</button><div class="notice" style="margin-top:12px">PDFは文字情報を端末内で解析します。画像はOCRで読み取ります（初回は少し時間がかかります）。読み取れない箇所は元資料を見ながら手動修正できます。</div></section>`;
+function renderConferenceRegister(){const s=hospitalStats();if(!conferenceDraft)return `${renderSavedConferenceList()}<section class="card"><div class="row between"><div><div class="section-title" style="margin-bottom:3px">学会プログラムから登録</div><div class="small">PDF・画像から、掲載順をできるだけ保ったまま単位候補を抽出します。</div></div>${ICONS.file}</div><label class="upload source-upload"><input type="file" accept="application/pdf,image/*" onchange="loadConferenceSource(this.files?.[0])"><span class="upload-icon">${ICONS.file}</span><strong>PDF・画像を選択</strong><span>取り込んだ学会データは保存され、後日続きから確認できます</span></label><div class="divider-label"><span>操作を確認する</span></div><button class="btn soft block" onclick="loadSampleConference()">解析結果のサンプルを見る</button><div class="notice" style="margin-top:12px">PDFは文字情報を端末内で解析します。画像はOCRで読み取ります。読めない画像は、その画像を表示したまま手入力できます。</div></section>`;
   if(conferenceDraft.analysisPending)return `<section class="card conference-head"><div class="row between"><div><div class="kicker">ANALYZING</div><div class="section-title" style="margin-bottom:3px">${esc(conferenceDraft.name)}</div><div class="small">${esc(conferenceDraft.fileName)} を解析しています</div></div><button class="icon-text-btn" onclick="openSourceViewer()">${ICONS.eye}<span>元資料</span></button></div><div class="notice" style="margin-top:12px">${esc(conferenceDraft.analysisMessage||'PDFから文字と単位区分を読み取っています…')}</div></section>`;
-  if(conferenceDraft.analysisError&&!conferenceDraft.sessions.length)return `<section class="card conference-head"><div class="row between"><div><div class="kicker">SOURCE</div><div class="section-title" style="margin-bottom:3px">${esc(conferenceDraft.name)}</div><div class="small">${esc(conferenceDraft.fileName)}</div></div><button class="icon-text-btn" onclick="openSourceViewer()">${ICONS.eye}<span>元資料</span></button></div><div class="notice" style="margin-top:12px">${esc(conferenceDraft.analysisError)}</div><button class="btn soft block" style="margin-top:10px" onclick="setRegisterMode('manual')">手入力へ</button><button class="btn ghost block" style="margin-top:8px" onclick="clearConferenceDraft()">資料を閉じる</button></section>`;
-  const selected=conferenceDraft.sessions.filter(x=>x.status==='attended');const summary=summarizeConference(selected);return `<section class="card conference-head"><div class="row between"><div><div class="kicker">CONFERENCE</div><div class="section-title" style="margin-bottom:3px">${esc(conferenceDraft.name)}</div><div class="small">${conferenceDraft.sessions.length}件・元資料の順番を維持${conferenceDraft.autoParsed?'・自動抽出':''}</div></div>${conferenceDraft.fileName?`<button class="icon-text-btn" onclick="openSourceViewer()">${ICONS.eye}<span>元資料</span></button>`:''}</div>${conferenceDraft.fileName?`<div class="source-chip">${esc(conferenceDraft.fileName)}</div>`:''}${conferenceDraft.analysisWarning?`<div class="notice" style="margin-top:10px">${esc(conferenceDraft.analysisWarning)}</div>`:''}</section><section class="card no-pad"><div class="conference-guide"><span>参加状況をタップ</span><span class="legend-dot"></span><b>アクセント色＝今の不足に関連</b></div><div class="conference-list">${conferenceDraft.sessions.map((x,i)=>renderConferenceRow(x,i,s)).join('')}</div></section><section class="card sticky-summary"><div class="row between"><div><div class="small">参加にした講演</div><strong class="summary-total">${fmt(summary.total)}単位</strong></div><div class="summary-codes">${Object.entries(summary.byCode).slice(0,5).map(([c,u])=>`<span>${c} ${fmt(u)}</span>`).join('')}${Object.keys(summary.byCode).length>5?'<span>…</span>':''}</div></div><button class="btn accent block" onclick="saveConferenceTraining()" ${selected.length?'':'disabled'}>参加した講演を一括登録</button></section>`}
+  if(conferenceDraft.analysisError&&!conferenceDraft.sessions.length)return `<section class="card conference-head"><div class="row between"><div><div class="kicker">SOURCE</div><div class="section-title" style="margin-bottom:3px">${esc(conferenceDraft.name)}</div><div class="small">${esc(conferenceDraft.fileName)}</div></div><button class="icon-text-btn" onclick="openSourceViewer()">${ICONS.eye}<span>元資料</span></button></div><div class="notice" style="margin-top:12px">${esc(conferenceDraft.analysisError)}</div><button class="btn soft block" style="margin-top:10px" onclick="startManualFromConference()">${(conferenceDraft.sourceType||'').startsWith('image/')?'画像を見ながら手入力':'元資料を見ながら手入力'}</button><button class="btn ghost block" style="margin-top:8px" onclick="leaveConferenceDraft()">学会一覧に戻る</button></section>`;
+  const pending=conferenceDraft.sessions.filter(x=>x.status==='attended'&&!x.registeredAt);const summary=summarizeConference(pending);return `<section class="card conference-head"><div class="row between"><div><div class="kicker">CONFERENCE</div><div class="section-title" style="margin-bottom:3px">${esc(conferenceDraft.name)}</div><div class="small">${conferenceDraft.sessions.length}件・元資料の順番を維持${conferenceDraft.autoParsed?'・自動抽出':''}・自動保存</div></div>${conferenceDraft.fileName?`<button class="icon-text-btn" onclick="openSourceViewer()">${ICONS.eye}<span>元資料</span></button>`:''}</div>${conferenceDraft.fileName?`<div class="source-chip">${esc(conferenceDraft.fileName)}</div>`:''}${renderConferenceRegisteredSummary(conferenceDraft)}<label class="conference-date-field"><span>今回登録する取得日</span><input type="date" value="${conferenceDraft.date}" onchange="setConferenceDate(this.value)"></label>${conferenceDraft.analysisWarning?`<div class="notice" style="margin-top:10px">${esc(conferenceDraft.analysisWarning)}</div>`:''}<button class="conference-back-link" onclick="leaveConferenceDraft()">← 学会一覧に戻る</button></section><section class="card no-pad"><div class="conference-guide"><span>参加状況をタップ</span><span class="legend-dot"></span><b>登録済みは日付付きで保持</b></div><div class="conference-list">${conferenceDraft.sessions.map((x,i)=>renderConferenceRow(x,i,s)).join('')}</div></section><section class="card sticky-summary"><div class="row between"><div><div class="small">今回まだ未登録の参加講演</div><strong class="summary-total">${fmt(summary.total)}単位</strong></div><div class="summary-codes">${Object.entries(summary.byCode).slice(0,5).map(([c,u])=>`<span>${c} ${fmt(u)}</span>`).join('')}${Object.keys(summary.byCode).length>5?'<span>…</span>':''}</div></div><button class="btn accent block" onclick="saveConferenceTraining()" ${pending.length?'':'disabled'}>${pending.length?'未登録の参加講演を登録':'参加分は登録済み'}</button></section>`}
+function renderSavedConferenceList(){const cs=[...(state.conferences||[])].sort((a,b)=>(b.updatedAt||'').localeCompare(a.updatedAt||''));if(!cs.length)return '';return `<section class="card saved-conferences"><div class="section-title">取り込み済みの学会</div><div class="small" style="margin-top:-5px;margin-bottom:8px">参加・不参加を保存して、2日目以降も続きから確認できます。</div>${cs.map(c=>{const attended=(c.sessions||[]).filter(x=>x.status==='attended').length,registered=(c.sessions||[]).filter(x=>x.registeredAt).length,undecided=(c.sessions||[]).filter(x=>x.status==='undecided'&&!x.registeredAt).length;return `<div class="saved-conference-row"><button class="saved-conference-main" onclick="openSavedConference('${c.id}')"><strong>${esc(c.name)}</strong><span>${esc(c.fileName||'保存済みプログラム')}</span><small>参加 ${attended}件 ・ 登録済み ${registered}件 ・ 未確認 ${undecided}件</small></button><button class="saved-conference-delete" onclick="deleteSavedConference('${c.id}')">削除</button></div>`}).join('')}</section>`}
+function renderConferenceRegisteredSummary(c){const groups={};for(const s of c.sessions||[]){if(!s.registeredAt)continue;const d=s.registeredDate||'登録済み';if(!groups[d])groups[d]={count:0,total:0};groups[d].count++;for(const cr of s.credits||[])groups[d].total+=Number(cr.unit||0)}const rows=Object.entries(groups).sort(([a],[b])=>a.localeCompare(b));return rows.length?`<div class="conference-day-summary">${rows.map(([d,v])=>`<span><b>${esc(d)}</b>${v.count}件・${fmt(v.total)}単位</span>`).join('')}</div>`:''}
 
 function relevanceForSession(session,s){const codes=(session.credits||[]).map(c=>c.code).filter(Boolean);for(const c of codes){const m=s.mandatory.find(x=>x.code===c);if(m)return {label:'必須未取得',level:'high'}}for(const c of codes){const d=(c||'').split('-')[0];if(s.shortages.some(x=>x.domain===d))return {label:`${d}領域の不足`,level:'mid'}}if((session.credits||[]).some(c=>!c.code))return {label:'区分を確認',level:'check'};return null}
-function renderConferenceRow(x,i,s){const rel=relevanceForSession(x,s),credits=(x.credits||[]),needsCheck=!credits.length||credits.some(c=>!c.code||!(Number(c.unit)>0));return `<div class="conference-row ${x.status==='attended'?'is-attended':x.status==='skipped'?'is-skipped':''}"><div class="conf-order">${String(i+1).padStart(2,'0')}</div><div class="conf-main"><div class="conf-title">${esc(x.title)}</div><div class="conf-meta">${credits.length?credits.map(c=>`${c.code||'要確認'} ${Number(c.unit)>0?fmt(c.unit)+'単位':'単位要確認'}`).join(' ／ '):'単位区分 要確認'}${x.page?` ・ p.${x.page}`:''}</div><div class="conf-tags">${rel?`<span class="recommend-tag ${rel.level}">${rel.label}</span>`:''}${needsCheck?'<button class="manual-tag" onclick="editConferenceSession('+i+')">手動で確認</button>':''}</div></div><div class="conf-actions"><button class="status-btn ${x.status==='attended'?'on attended':''}" onclick="cycleConferenceStatus(${i},'attended')">参加</button><button class="status-btn ${x.status==='skipped'?'on skipped':''}" onclick="cycleConferenceStatus(${i},'skipped')">不参加</button><button class="edit-mini" onclick="editConferenceSession(${i})">編集</button></div></div>`}
+function renderConferenceRow(x,i,s){const rel=relevanceForSession(x,s),credits=(x.credits||[]),needsCheck=!credits.length||credits.some(c=>!c.code||!(Number(c.unit)>0)),registered=!!x.registeredAt;return `<div class="conference-row ${registered?'is-registered':x.status==='attended'?'is-attended':x.status==='skipped'?'is-skipped':''}"><div class="conf-order">${String(i+1).padStart(2,'0')}</div><div class="conf-main"><div class="conf-title">${esc(x.title)}</div><div class="conf-meta">${credits.length?credits.map(c=>`${c.code||'要確認'} ${Number(c.unit)>0?fmt(c.unit)+'単位':'単位要確認'}`).join(' ／ '):'単位区分 要確認'}${x.page?` ・ p.${x.page}`:''}</div><div class="conf-tags">${registered?`<span class="registered-tag">${esc(x.registeredDate||'')} 登録済み</span>`:(rel?`<span class="recommend-tag ${rel.level}">${rel.label}</span>`:'')}${!registered&&needsCheck?'<button class="manual-tag" onclick="editConferenceSession('+i+')">手動で確認</button>':''}</div></div><div class="conf-actions">${registered?'<span class="conf-locked">登録済み</span>':`<button class="status-btn ${x.status==='attended'?'on attended':''}" onclick="cycleConferenceStatus(${i},'attended')">参加</button><button class="status-btn ${x.status==='skipped'?'on skipped':''}" onclick="cycleConferenceStatus(${i},'skipped')">不参加</button><button class="edit-mini" onclick="editConferenceSession(${i})">編集</button>`}</div></div>`}
+
 function summarizeConference(rows){const byCode={};let total=0;for(const r of rows)for(const c of r.credits||[]){total+=Number(c.unit||0);if(c.code)byCode[c.code]=(byCode[c.code]||0)+Number(c.unit||0)}return {total,byCode}}
 
 function renderHistory(){
@@ -289,10 +301,10 @@ function renderPlanModal(){const q=currentQualification();if(!isHospitalQualific
 function renderQualificationDrawer(){const q=currentQualification();return `<div class="drawer-back" onclick="closeMenu(event)"><aside class="drawer" onclick="event.stopPropagation()"><div class="drawer-head"><div><div class="kicker">QUALIFICATIONS</div><h2>目標資格</h2></div><button class="close-x" onclick="toggleMenu()">×</button></div><div class="qual-list">${state.qualifications.map(x=>`<button class="qual-row ${x.id===q.id?'active':''}" onclick="switchQualification('${x.id}')"><span><strong>${esc(x.name)}</strong><small>${x.id===HOSPITAL_CERT.id?'公式要件テンプレート':'要件テンプレート未設定'}</small></span><b>${x.id===q.id?'✓':'›'}</b></button>`).join('')}</div><button class="btn accent block" style="margin-top:14px" onclick="openQualificationModal()">＋ 目標資格を追加</button></aside></div>`}
 function renderQualificationModal(){return `<div class="modal-back" onclick="closeQualificationModal(event)"><div class="modal" onclick="event.stopPropagation()"><div class="row between"><h3>目標資格を追加</h3><button class="close-x" onclick="closeQualificationModal()">×</button></div><div class="notice">公式テンプレート対応資格は今後追加できます。未対応の資格は、必要な要件を選んでカスタム作成できます。</div><div class="field" style="margin-top:14px"><label>資格名</label><input id="newQualName" class="input" placeholder="例：外来がん治療専門薬剤師"></div><div class="req-check-grid">${[['credits','単位'],['experience','実務経験'],['cases','症例'],['paper','論文'],['presentation','学会発表'],['exam','試験'],['membership','会員・基礎資格']].map(([k,l])=>`<label class="req-check"><input type="checkbox" data-req="${k}" ${['credits','experience','cases','exam'].includes(k)?'checked':''}><span>${l}</span></label>`).join('')}</div><button class="btn accent block" style="margin-top:14px" onclick="addQualificationFromModal()">追加する</button></div></div>`}
 
-function renderSourceViewer(){return `<div class="viewer-back"><div class="viewer"><header><strong>${esc(conferenceDraft?.fileName||'元資料')}</strong><button class="close-x" onclick="closeSourceViewer()">×</button></header><div class="viewer-body">${selectedSourceURL?(selectedSourceFile?.type==='application/pdf'?`<iframe src="${selectedSourceURL}"></iframe>`:`<img src="${selectedSourceURL}" alt="元資料">`):'<div class="empty">このサンプルには元ファイルが紐づいていません。<br>PDF・画像を選択した場合は、ここで元資料を確認できます。</div>'}</div></div></div>`}
+function renderSourceViewer(){const c=conferenceDraft||state.conferences.find(x=>x.id===manualSourceConferenceId);return `<div class="viewer-back"><div class="viewer"><header><strong>${esc(c?.fileName||'元資料')}</strong><button class="close-x" onclick="closeSourceViewer()">×</button></header><div class="viewer-body">${selectedSourceURL?(((selectedSourceFile?.type||conferenceDraft?.sourceType||state.conferences.find(x=>x.id===manualSourceConferenceId)?.sourceType||'')==='application/pdf')?`<iframe src="${selectedSourceURL}"></iframe>`:`<img src="${selectedSourceURL}" alt="元資料">`):'<div class="empty">このサンプルには元ファイルが紐づいていません。<br>PDF・画像を選択した場合は、ここで元資料を確認できます。</div>'}</div></div></div>`}
 function renderConferenceEditModal(){const x=conferenceDraft.sessions[editConferenceIndex],c=x.credits?.[0]||{code:'',unit:1};return `<div class="modal-back" onclick="closeConferenceEdit(event)"><div class="modal" onclick="event.stopPropagation()"><div class="row between"><div><div class="kicker">MANUAL CHECK</div><h3 style="margin:3px 0 0">単位区分を修正</h3></div><button class="close-x" onclick="closeConferenceEdit()">×</button></div><div class="small" style="margin:10px 0 14px">${esc(x.title)}</div><div class="field"><label>研修項目</label><select id="confEditCode" class="select"><option value="">要確認</option>${ITEM_CODES.map(code=>`<option value="${code}" ${code===c.code?'selected':''}>${code} ${itemName(code)}</option>`).join('')}</select></div><div class="field"><label>単位</label><input id="confEditUnit" class="input" type="number" step="0.5" min="0" value="${Number(c.unit||0)}"></div><button class="btn accent block" onclick="saveConferenceEdit()">修正する</button><div class="small" style="margin-top:10px">複数区分が付く講演は複数明細として保持できます。この編集画面では先頭の明細を修正します。</div></div></div>`}
 
-function go(v){currentView=v;if(v!=='register'){editingId=null;creditSelectMode=false;selectedCreditEntryIds.clear()}render({top:true})}
+function go(v){currentView=v;if(v!=='register'){editingId=null;creditSelectMode=false;selectedCreditEntryIds.clear();manualSourceConferenceId=null}render({top:true})}
 function render(opts={}){
   const root=document.getElementById('app');
   const previousView=root.dataset.view||'';
@@ -310,13 +322,13 @@ function render(opts={}){
     window.scrollTo({top:opts.top?0:scrollY,behavior:'instant'});
   });
 }
-function setRegisterMode(mode){registerMode=mode;render()}
+function setRegisterMode(mode){registerMode=mode;if(mode==='manual'&&conferenceDraft){manualSourceConferenceId=conferenceDraft.id;regDraft.date=conferenceDraft.date||regDraft.date;if(!regDraft.name)regDraft.name=conferenceDraft.name||''}if(mode==='conference')manualSourceConferenceId=null;render()}
 function addCredit(code,unit){regDraft.creditEntries.push({id:uid(),code,unit:Number(unit),title:''});render()}
 function addCustomCredit(code){const raw=prompt(`${code} の単位数を入力してください`,'0.5');if(raw===null)return;const v=Number(raw);if(v>0)addCredit(code,v)}
 function removeCredit(id){regDraft.creditEntries=regDraft.creditEntries.filter(e=>e.id!==id);render()}
-function saveTraining(){if(!regDraft.date||!regDraft.name.trim())return alert('取得日と研修名を入力してください。');if(!regDraft.creditEntries.length)return alert('取得単位を1件以上追加してください。');const t={...regDraft,id:editingId||uid(),name:regDraft.name.trim()};if(editingId){const old=state.trainings.find(x=>x.id===editingId);const keep=new Set((t.creditEntries||[]).map(e=>e.id));for(const e of old?.creditEntries||[]){if(!keep.has(e.id)){const key=`${editingId}:${e.id}`;delete state.confirmedAllocations[key];delete state.manualAllocations[key]}}state.trainings=state.trainings.map(x=>x.id===editingId?t:x)}else state.trainings.push(t);saveData();editingId=null;creditSelectMode=false;selectedCreditEntryIds.clear();regDraft=freshDraft();currentView='history';render({top:true})}
-function editTraining(id){const t=state.trainings.find(x=>x.id===id);if(!t)return;editingId=id;creditSelectMode=false;selectedCreditEntryIds.clear();regDraft=JSON.parse(JSON.stringify(t));registerMode='manual';currentView='register';render({top:true})}
-function cancelEdit(){editingId=null;creditSelectMode=false;selectedCreditEntryIds.clear();regDraft=freshDraft();currentView='history';render({top:true})}
+function saveTraining(){if(!regDraft.date||!regDraft.name.trim())return alert('取得日と研修名を入力してください。');if(!regDraft.creditEntries.length)return alert('取得単位を1件以上追加してください。');const t={...regDraft,id:editingId||uid(),name:regDraft.name.trim(),conferenceId:regDraft.conferenceId||manualSourceConferenceId||''};if(manualSourceConferenceId&&!t.files?.length){const c=state.conferences.find(x=>x.id===manualSourceConferenceId)||conferenceDraft;if(c?.fileName)t.files=[{name:c.fileName}]}if(editingId){const old=state.trainings.find(x=>x.id===editingId);const keep=new Set((t.creditEntries||[]).map(e=>e.id));for(const e of old?.creditEntries||[]){if(!keep.has(e.id)){const key=`${editingId}:${e.id}`;delete state.confirmedAllocations[key];delete state.manualAllocations[key]}}state.trainings=state.trainings.map(x=>x.id===editingId?t:x)}else state.trainings.push(t);saveData();editingId=null;creditSelectMode=false;selectedCreditEntryIds.clear();manualSourceConferenceId=null;regDraft=freshDraft();currentView='history';render({top:true})}
+function editTraining(id){const t=state.trainings.find(x=>x.id===id);if(!t)return;editingId=id;creditSelectMode=false;selectedCreditEntryIds.clear();manualSourceConferenceId=t.conferenceId||null;regDraft=JSON.parse(JSON.stringify(t));registerMode='manual';currentView='register';if(manualSourceConferenceId)prepareConferenceSource(manualSourceConferenceId).finally(()=>render({top:true}));else render({top:true})}
+function cancelEdit(){editingId=null;creditSelectMode=false;selectedCreditEntryIds.clear();manualSourceConferenceId=null;regDraft=freshDraft();currentView='history';render({top:true})}
 function setAllocation(id,val){if(state.confirmedAllocations[id])return;state.manualAllocations[id]=val;saveData();render()}
 function resetRecommendations(){state.manualAllocations={};saveData();render()}
 function confirmAllHospital(){const cs=allCredits().filter(c=>allocationFor(c)===HOSPITAL_CERT.id&&!state.confirmedAllocations[c.creditId]);if(!cs.length)return alert('確定対象がありません。');const total=cs.reduce((a,c)=>a+c.unit,0);if(!confirm(`${cs.length}明細・${fmt(total)}単位をアプリ上で確定済みにしますか？`))return;cs.forEach(c=>{state.confirmedAllocations[c.creditId]=HOSPITAL_CERT.id;delete state.manualAllocations[c.creditId]});saveData();render()}
@@ -330,41 +342,23 @@ function setPlanStartYear(value){const y=Number(value);if(!Number.isFinite(y))re
 function toggleDataManagement(){settingsDataOpen=!settingsDataOpen;render()}
 
 async function loadConferenceSource(file){
-  if(!file)return;
-  selectedSourceFile=file;
-  if(selectedSourceURL)URL.revokeObjectURL(selectedSourceURL);
-  selectedSourceURL=URL.createObjectURL(file);
-  conferenceDraft={name:file.name.replace(/\.(pdf|png|jpe?g)$/i,''),date:todayISO(),fileName:file.name,sessions:[],analysisPending:true,analysisMessage:'資料を確認しています…',analysisError:'',analysisWarning:'',autoParsed:false};
-  render();
-  const isPdf=file.type==='application/pdf'||/\.pdf$/i.test(file.name);
-  const isImage=(file.type||'').startsWith('image/')||/\.(png|jpe?g|webp|heic)$/i.test(file.name);
-  if(!isPdf&&!isImage){
-    conferenceDraft.analysisPending=false;
-    conferenceDraft.analysisError='このファイル形式は自動読取に対応していません。PDFまたは画像を選択してください。';
-    render();
-    return;
-  }
-  try{
-    const sessions=isPdf?await parseConferencePdf(file):await parseConferenceImage(file);
-    if(!conferenceDraft)return;
-    conferenceDraft.analysisPending=false;
-    conferenceDraft.sessions=sessions;
-    conferenceDraft.autoParsed=true;
-    const unresolved=sessions.filter(x=>!(x.credits||[]).length||(x.credits||[]).some(c=>!c.code||!(Number(c.unit)>0))).length;
-    const pageNote=isPdf&&conferenceDraft.detectedUnitPages?.length?` 単位情報ページ: ${conferenceDraft.detectedUnitPages.join('・')}ページ。`:'';
-    conferenceDraft.analysisWarning=unresolved?`${sessions.length}件を抽出しました。${pageNote}うち${unresolved}件は単位区分または単位数を手動で確認してください。`:`${sessions.length}件を${isPdf?'PDF':'画像'}から抽出しました。${pageNote}登録前に元資料との一致を確認してください。`;
-    if(!sessions.length){
-      conferenceDraft.analysisError=isPdf?'単位情報を自動抽出できませんでした。画像スキャン形式のPDF、または表の文字情報を取得できないPDFの可能性があります。元資料を見ながら手入力してください。':'画像から単位情報を自動抽出できませんでした。元資料を見ながら手入力してください。';
-    }
-    render();
-  }catch(err){
-    console.error('資料解析エラー',err);
-    if(!conferenceDraft)return;
-    conferenceDraft.analysisPending=false;
-    conferenceDraft.analysisError='資料を解析できませんでした。元資料を開いて確認しながら手入力できます。';
-    render();
-  }
+  if(!file)return;releaseSelectedSource();selectedSourceFile=file;selectedSourceURL=URL.createObjectURL(file);
+  const conferenceId=uid(),sourceId=`conference-source-${conferenceId}`;
+  conferenceDraft={id:conferenceId,name:file.name.replace(/\.(pdf|png|jpe?g|webp|heic)$/i,''),date:todayISO(),fileName:file.name,sourceType:file.type||'',sourceId,sessions:[],analysisPending:true,analysisMessage:'資料を確認しています…',analysisError:'',analysisWarning:'',autoParsed:false,createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()};
+  upsertConferenceDraft();if(storageBackend==='indexeddb'){try{await idbFileSet(sourceId,file)}catch(err){console.warn('元資料の保存に失敗しました',err)}}render();
+  const isPdf=file.type==='application/pdf'||/\.pdf$/i.test(file.name);const isImage=(file.type||'').startsWith('image/')||/\.(png|jpe?g|webp|heic)$/i.test(file.name);
+  if(!isPdf&&!isImage){conferenceDraft.analysisPending=false;conferenceDraft.analysisError='このファイル形式は自動読取に対応していません。PDFまたは画像を選択してください。';upsertConferenceDraft();render();return}
+  try{const sessions=isPdf?await parseConferencePdf(file):await parseConferenceImage(file);if(!conferenceDraft)return;conferenceDraft.analysisPending=false;conferenceDraft.sessions=sessions;conferenceDraft.autoParsed=true;const unresolved=sessions.filter(x=>!(x.credits||[]).length||(x.credits||[]).some(c=>!c.code||!(Number(c.unit)>0))).length;const pageNote=isPdf&&conferenceDraft.detectedUnitPages?.length?` 単位情報ページ: ${conferenceDraft.detectedUnitPages.join('・')}ページ。`:'';conferenceDraft.analysisWarning=unresolved?`${sessions.length}件を抽出しました。${pageNote}うち${unresolved}件は単位区分または単位数を手動で確認してください。`:`${sessions.length}件を${isPdf?'PDF':'画像'}から抽出しました。${pageNote}登録前に元資料との一致を確認してください。`;if(!sessions.length)conferenceDraft.analysisError=isPdf?'単位情報を自動抽出できませんでした。画像スキャン形式のPDF、または表の文字情報を取得できないPDFの可能性があります。元資料を見ながら手入力してください。':'画像から単位情報を自動抽出できませんでした。画像を表示したまま手入力できます。';upsertConferenceDraft();render()}catch(err){console.error('資料解析エラー',err);if(!conferenceDraft)return;conferenceDraft.analysisPending=false;conferenceDraft.analysisError='資料を解析できませんでした。元資料を表示しながら手入力できます。';upsertConferenceDraft();render()}
 }
+function releaseSelectedSource(){selectedSourceFile=null;if(selectedSourceURL)URL.revokeObjectURL(selectedSourceURL);selectedSourceURL=''}
+function conferenceSerializable(d){const x=JSON.parse(JSON.stringify(d));x.analysisPending=false;delete x.analysisMessage;return x}
+function upsertConferenceDraft(){if(!conferenceDraft)return;conferenceDraft.updatedAt=new Date().toISOString();state.conferences=state.conferences||[];const snap=conferenceSerializable(conferenceDraft),i=state.conferences.findIndex(x=>x.id===snap.id);if(i>=0)state.conferences[i]=snap;else state.conferences.push(snap);saveData()}
+async function prepareConferenceSource(id){const c=(conferenceDraft&&conferenceDraft.id===id)?conferenceDraft:state.conferences.find(x=>x.id===id);if(!c)return;releaseSelectedSource();if(!c.sourceId||storageBackend!=='indexeddb')return;try{const blob=await idbFileGet(c.sourceId);if(blob){selectedSourceFile=blob;selectedSourceURL=URL.createObjectURL(blob)}}catch(err){console.warn('元資料を開けませんでした',err)}}
+async function openSavedConference(id){const c=state.conferences.find(x=>x.id===id);if(!c)return;conferenceDraft=JSON.parse(JSON.stringify(c));registerMode='conference';manualSourceConferenceId=null;await prepareConferenceSource(id);render({top:true})}
+function leaveConferenceDraft(){upsertConferenceDraft();conferenceDraft=null;manualSourceConferenceId=null;releaseSelectedSource();render({top:true})}
+async function deleteSavedConference(id){const c=state.conferences.find(x=>x.id===id);if(!c)return;if(!confirm(`「${c.name}」の取り込みデータを削除しますか？\n登録済みの研修記録は削除されません。`))return;state.conferences=state.conferences.filter(x=>x.id!==id);saveData();if(c.sourceId&&storageBackend==='indexeddb')idbFileDelete(c.sourceId).catch(()=>{});if(conferenceDraft?.id===id){conferenceDraft=null;releaseSelectedSource()}render()}
+function setConferenceDate(value){if(!conferenceDraft||!value)return;conferenceDraft.date=value;upsertConferenceDraft();render()}
+function startManualFromConference(){if(!conferenceDraft)return;manualSourceConferenceId=conferenceDraft.id;regDraft=freshDraft();regDraft.date=conferenceDraft.date||todayISO();regDraft.name=conferenceDraft.name||'';regDraft.conferenceId=conferenceDraft.id;registerMode='manual';render({top:true})}
 
 function normalizePdfCode(raw=''){
   const map={'Ⅰ':'I','Ⅱ':'II','Ⅲ':'III','Ⅳ':'IV','Ⅴ':'V'};
@@ -638,8 +632,8 @@ function parseConferenceLines(lines){
   return merged.map((s,i)=>({...s,sourceOrder:i+1}));
 }
 
-function loadSampleConference(){conferenceDraft={name:'学会プログラム（解析サンプル）',date:todayISO(),fileName:'',sessions:sampleConferenceSessions(),analysisPending:false};render()}
-function clearConferenceDraft(){conferenceDraft=null;selectedSourceFile=null;if(selectedSourceURL)URL.revokeObjectURL(selectedSourceURL);selectedSourceURL='';render()}
+function loadSampleConference(){conferenceDraft={id:uid(),name:'学会プログラム（解析サンプル）',date:todayISO(),fileName:'',sourceType:'',sourceId:'',sessions:sampleConferenceSessions(),analysisPending:false,createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()};upsertConferenceDraft();render()}
+function clearConferenceDraft(){leaveConferenceDraft()}
 function sampleConferenceSessions(){return [
   {title:'特別講演① 2040年を見据えた医薬行政の方向性と病院薬剤師に期待すること',page:24,credits:[{code:'I-1',unit:.5}]},
   {title:'特別講演② 病院薬剤師の生産性を考える',page:24,credits:[{code:'I-1',unit:.5}]},
@@ -672,12 +666,12 @@ function sampleConferenceSessions(){return [
   {title:'妊婦・授乳婦専門薬剤師部門 シンポジウム',page:25,credits:[{code:'III-1',unit:1}]},
   {title:'HIV感染症専門薬剤師部門 シンポジウム',page:25,credits:[{code:'II-6',unit:1}]}
 ].map((x,i)=>({...x,status:'undecided',sourceOrder:i+1}))}
-function cycleConferenceStatus(i,status){const x=conferenceDraft.sessions[i];x.status=x.status===status?'undecided':status;render()}
+function cycleConferenceStatus(i,status){const x=conferenceDraft.sessions[i];if(x.registeredAt)return;x.status=x.status===status?'undecided':status;upsertConferenceDraft();render()}
 function editConferenceSession(i){editConferenceIndex=i;render()}
 function closeConferenceEdit(e){if(e&&e.target!==e.currentTarget)return;editConferenceIndex=null;render()}
-function saveConferenceEdit(){const code=document.getElementById('confEditCode').value,unit=Number(document.getElementById('confEditUnit').value);if(!(unit>0))return alert('単位数を入力してください。');const x=conferenceDraft.sessions[editConferenceIndex];if(!x.credits?.length)x.credits=[{code,unit}];else x.credits[0]={...x.credits[0],code,unit};editConferenceIndex=null;render()}
-function saveConferenceTraining(){const attended=conferenceDraft.sessions.filter(x=>x.status==='attended');if(!attended.length)return;const unresolved=attended.some(x=>!(x.credits||[]).length||(x.credits||[]).some(c=>!c.code||!(Number(c.unit)>0)));if(unresolved&&!confirm('単位区分が「要確認」の講演があります。このまま登録しますか？'))return;const entries=[];attended.forEach(s=>(s.credits||[]).forEach(c=>entries.push({id:uid(),code:c.code||'要確認',unit:Number(c.unit||0),title:s.title,sourceOrder:s.sourceOrder,sourcePage:s.page})));state.trainings.push({id:uid(),date:conferenceDraft.date,name:conferenceDraft.name,source:'jshp',cpc:false,hopessId:'',memo:'学会プログラムから一括登録',files:conferenceDraft.fileName?[{name:conferenceDraft.fileName}]:[],creditEntries:entries});saveData();conferenceDraft=null;selectedSourceFile=null;if(selectedSourceURL)URL.revokeObjectURL(selectedSourceURL);selectedSourceURL='';currentView='history';render({top:true})}
-function openSourceViewer(){sourceViewerOpen=true;render()}
+function saveConferenceEdit(){const code=document.getElementById('confEditCode').value,unit=Number(document.getElementById('confEditUnit').value);if(!(unit>0))return alert('単位数を入力してください。');const x=conferenceDraft.sessions[editConferenceIndex];if(x.registeredAt)return alert('登録済みの講演は履歴から編集してください。');if(!x.credits?.length)x.credits=[{code,unit}];else x.credits[0]={...x.credits[0],code,unit};editConferenceIndex=null;upsertConferenceDraft();render()}
+function saveConferenceTraining(){const attended=conferenceDraft.sessions.filter(x=>x.status==='attended'&&!x.registeredAt);if(!attended.length)return;const unresolved=attended.some(x=>!(x.credits||[]).length||(x.credits||[]).some(c=>!c.code||!(Number(c.unit)>0)));if(unresolved&&!confirm('単位区分が「要確認」の講演があります。このまま登録しますか？'))return;const entries=[];attended.forEach(s=>(s.credits||[]).forEach(c=>entries.push({id:uid(),code:c.code||'要確認',unit:Number(c.unit||0),title:s.title,sourceOrder:s.sourceOrder,sourcePage:s.page})));const trainingId=uid();state.trainings.push({id:trainingId,date:conferenceDraft.date,name:conferenceDraft.name,conferenceId:conferenceDraft.id,source:'jshp',cpc:false,hopessId:'',memo:'学会プログラムから一括登録',files:conferenceDraft.fileName?[{name:conferenceDraft.fileName}]:[],creditEntries:entries});const now=new Date().toISOString();attended.forEach(s=>{s.registeredAt=now;s.registeredDate=conferenceDraft.date;s.registeredTrainingId=trainingId});upsertConferenceDraft();saveData();alert(`${attended.length}件を登録しました。\n学会データは保存されているので、次の日も続きから確認できます。`);render()}
+async function openSourceViewer(){const id=conferenceDraft?.id||manualSourceConferenceId;if(id&&!selectedSourceURL)await prepareConferenceSource(id);sourceViewerOpen=true;render()}
 function closeSourceViewer(){sourceViewerOpen=false;render()}
 
 function toggleMenu(){menuOpen=!menuOpen;qualModalOpen=false;render()}
@@ -702,30 +696,7 @@ async function checkForAppUpdate(){
     if(info?.version&&isNewerVersion(info.version,APP_VERSION)){updateAvailableVersion=info.version;render()}
   }catch{}
 }
-async function forceAppUpdate(){
-  if(updateInProgress)return;
-  updateInProgress=true;render();
-  try{
-    if('serviceWorker' in navigator){
-      const reg=await navigator.serviceWorker.getRegistration();
-      if(reg){
-        await reg.update().catch(()=>{});
-        const candidate=reg.waiting||reg.installing;
-        if(candidate&&candidate.state!=='activated'){
-          await new Promise(resolve=>{
-            const done=()=>resolve();
-            if(candidate.state==='activated')return done();
-            candidate.addEventListener('statechange',()=>{if(candidate.state==='activated')done()});
-            setTimeout(done,3500);
-          });
-        }
-      }
-    }
-    if('caches' in window){const keys=await caches.keys();await Promise.all(keys.filter(k=>k.startsWith('pharm-cert-')).map(k=>caches.delete(k)))}
-  }catch(e){console.warn('更新処理',e)}
-  const sep=location.search?'&':'?';
-  location.replace(`${location.pathname}${location.search}${sep}update=${Date.now()}`);
-}
+async function forceAppUpdate(){if(updateInProgress)return;updateInProgress=true;render();try{if('caches' in window){const keys=await caches.keys();await Promise.all(keys.filter(k=>k.startsWith('pharm-cert-')).map(k=>caches.delete(k)))}if('serviceWorker' in navigator){const regs=await navigator.serviceWorker.getRegistrations();for(const reg of regs){try{await reg.update();if(reg.waiting)reg.waiting.postMessage({type:'SKIP_WAITING'})}catch{}}}}catch(e){console.warn('更新処理',e)}location.replace(`${location.pathname}?update=${Date.now()}`)}
 
 async function bootstrap(){
   try{state=await loadData()}catch(err){console.error(err);state=migrateData(defaultData());storageBackend='localStorage'}

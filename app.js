@@ -1,5 +1,5 @@
-const APP_VERSION='1.18.0';
-const SCHEMA_VERSION=10;
+const APP_VERSION='1.19.0';
+const SCHEMA_VERSION=11;
 const LEGACY_STORAGE_KEY='pharm-cert-pwa-data';
 const DB_NAME='pharm-cert-pwa';
 const DB_VERSION=2;
@@ -28,6 +28,24 @@ const HOSPITAL_CERT={
   ]
 };
 
+// 単位制度は取得明細ごとに内部保持する。通常画面には出さず、配分内訳で確認できる。
+const UNIT_SYSTEM_MASTER={
+  'jshp-hospital':{id:'jshp-hospital',label:'日病薬 病院薬学認定'},
+  'unknown':{id:'unknown',label:'要確認'}
+};
+function unitSystemLabel(id){return UNIT_SYSTEM_MASTER[id]?.label||String(id||'要確認')}
+function unitSystemIdFromText(text=''){
+  const t=String(text).replace(/\s+/g,' ');
+  if(/日病薬病院薬学認定薬剤師制度|病院薬学認定薬剤師制度|病院薬学単位(?:\s*[・･]?\s*研修科目)?/.test(t))return 'jshp-hospital';
+  return '';
+}
+function legacyUnitSystemId(entry,training){
+  if(entry?.unitSystemId)return String(entry.unitSystemId);
+  // 旧版で日病薬として登録済みのものだけ自動設定。その他は既存の計算結果を変えず「要確認」で保持する。
+  return training?.source==='jshp'?'jshp-hospital':'unknown';
+}
+function normalizeCreditEntry(e,training){return {...e,id:e?.id||uid(),unit:Number(e?.unit||0),unitSystemId:legacyUnitSystemId(e,training)}}
+
 const ICONS={
   menu:`<svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></svg>`,
   home:`<svg viewBox="0 0 24 24"><path d="M4 11.2 12 4l8 7.2"/><path d="M5.8 10.2V20h12.4v-9.8M9.4 20v-6.1h5.2V20"/></svg>`,
@@ -47,7 +65,7 @@ const defaultData=()=>({
 });
 
 let state=defaultData();
-let currentView='history',editingId=null,registerMode='manual',historyMode='matrix',menuOpen=false,qualModalOpen=false,requirementsOpen=false,settingsDataOpen=false,themePickerOpen=false,planModalOpen=false;
+let currentView='home',editingId=null,registerMode='manual',historyMode='matrix',menuOpen=false,qualModalOpen=false,requirementsOpen=false,settingsDataOpen=false,themePickerOpen=false,planModalOpen=false,allocationDetailsOpen=false;
 let planDraft=freshPlanDraft(),editingPlanId=null;
 let excelCandidates=[],excelFileName='',excelLoading=false,excelError='';
 let creditSelectMode=false;
@@ -86,9 +104,9 @@ function itemName(code){for(const g of CURRICULUM){const it=g.items.find(i=>i[0]
 function currentQualification(){return state.qualifications.find(q=>q.id===state.settings.selectedQualificationId)||HOSPITAL_CERT}
 function isHospitalQualification(q=currentQualification()){return q.id===HOSPITAL_CERT.id}
 function requirementLabel(k){return ({credits:'単位',experience:'実務経験',cases:'症例',paper:'論文',presentation:'学会発表',exam:'試験',membership:'会員・基礎資格'})[k]||k}
-function normalizeTraining(t){if(Array.isArray(t.creditEntries))return {...t,creditEntries:t.creditEntries.map(e=>({...e,id:e.id||uid(),unit:Number(e.unit||0)}))};return {...t,creditEntries:Object.entries(t.credits||{}).map(([code,unit])=>({id:uid(),code,unit:Number(unit),title:''}))}}
-function normalizePlanRecord(p){return {id:p?.id||uid(),date:p?.date||todayISO(),name:String(p?.name||'').trim(),place:String(p?.place||''),url:String(p?.url||''),memo:String(p?.memo||''),source:String(p?.source||''),conferenceId:String(p?.conferenceId||''),creditEntries:(p?.creditEntries||[]).map(e=>({...e,id:e.id||uid(),unit:Number(e.unit||0)})),createdAt:p?.createdAt||new Date().toISOString(),updatedAt:p?.updatedAt||p?.createdAt||new Date().toISOString()}}
-function normalizeConferenceRecord(c){const x={...c};x.id=x.id||uid();x.sourceId=x.sourceId||'';x.sourceType=x.sourceType||'';x.fileName=x.fileName||'';x.name=x.name||x.fileName||'学会プログラム';x.date=x.date||todayISO();x.sessions=(x.sessions||[]).map((s,i)=>({...s,sourceOrder:s.sourceOrder||i+1,status:s.status==='skipped'?'undecided':(s.status||'undecided'),credits:(s.credits||[]).map(v=>({...v,unit:Number(v.unit||0)}))}));x.analysisPending=false;x.createdAt=x.createdAt||new Date().toISOString();x.updatedAt=x.updatedAt||x.createdAt;return x}
+function normalizeTraining(t){if(Array.isArray(t.creditEntries))return {...t,creditEntries:t.creditEntries.map(e=>normalizeCreditEntry(e,t))};return {...t,creditEntries:Object.entries(t.credits||{}).map(([code,unit])=>normalizeCreditEntry({id:uid(),code,unit:Number(unit),title:''},t))}}
+function normalizePlanRecord(p){const base={id:p?.id||uid(),date:p?.date||todayISO(),name:String(p?.name||'').trim(),place:String(p?.place||''),url:String(p?.url||''),memo:String(p?.memo||''),source:String(p?.source||''),conferenceId:String(p?.conferenceId||''),createdAt:p?.createdAt||new Date().toISOString(),updatedAt:p?.updatedAt||p?.createdAt||new Date().toISOString()};return {...base,creditEntries:(p?.creditEntries||[]).map(e=>normalizeCreditEntry(e,p))}}
+function normalizeConferenceRecord(c){const x={...c};x.id=x.id||uid();x.sourceId=x.sourceId||'';x.sourceType=x.sourceType||'';x.fileName=x.fileName||'';x.name=x.name||x.fileName||'学会プログラム';x.date=x.date||todayISO();x.sessions=(x.sessions||[]).map((s,i)=>({...s,sourceOrder:s.sourceOrder||i+1,status:s.status==='skipped'?'undecided':(s.status||'undecided'),credits:(s.credits||[]).map(v=>({...v,unit:Number(v.unit||0),unitSystemId:v.unitSystemId||'unknown'}))}));x.analysisPending=false;x.createdAt=x.createdAt||new Date().toISOString();x.updatedAt=x.updatedAt||x.createdAt;return x}
 function migrateData(raw){
   let d=raw&&typeof raw==='object'?JSON.parse(JSON.stringify(raw)):defaultData();
   d.settings={hopess:false,dark:false,theme:'burgundy',practiceStartDate:'',selectedQualificationId:'jshp-hospital',qualificationPlans:{'jshp-hospital':{startFiscalYear:2026}},...(d.settings||{})};
@@ -162,7 +180,7 @@ function saveData(){
   }
 }
 
-function allCredits(){return state.trainings.flatMap(t=>(t.creditEntries||[]).map(e=>({creditId:`${t.id}:${e.id}`,entryId:e.id,trainingId:t.id,date:t.date,name:t.name,code:e.code,domain:(e.code||'').split('-')[0],unit:Number(e.unit),lectureTitle:e.title||'',source:t.source,cpc:t.cpc,sourceOrder:e.sourceOrder||null,sourcePage:e.sourcePage||null})))}
+function allCredits(){return state.trainings.flatMap(t=>(t.creditEntries||[]).map(e=>({creditId:`${t.id}:${e.id}`,entryId:e.id,trainingId:t.id,date:t.date,name:t.name,code:e.code,domain:(e.code||'').split('-')[0],unit:Number(e.unit),lectureTitle:e.title||'',source:t.source,cpc:t.cpc,unitSystemId:e.unitSystemId||legacyUnitSystemId(e,t),sourceOrder:e.sourceOrder||null,sourcePage:e.sourcePage||null})))}
 function isCreditEligibleForHospital(c,appYear=targetApplicationYear(HOSPITAL_CERT)){return targetFiscalYears(appYear,HOSPITAL_CERT).includes(fy(c.date))}
 function recommendAllocation(c){return isCreditEligibleForHospital(c)?HOSPITAL_CERT.id:'unassigned'}
 function allocationFor(c){return state.confirmedAllocations[c.creditId]||state.manualAllocations[c.creditId]||recommendAllocation(c)}
@@ -347,8 +365,8 @@ async function ensureXlsx(){if(window.XLSX)return window.XLSX;const sources=['ht
 function extractExcelCandidates(workbook,XLSX){const out=[];for(const sheetName of workbook.SheetNames||[]){const ws=workbook.Sheets[sheetName];const rows=XLSX.utils.sheet_to_json(ws,{header:1,defval:'',raw:true});if(!rows.length)continue;let headerRow=-1,cols=null;for(let r=0;r<Math.min(rows.length,25);r++){const h=rows[r]||[];const date=excelColIndex(h,['取得日','受講日','研修日','日付','開催日']);const name=excelColIndex(h,['研修名','研修会名','学会名','講演名','研修会・学会名']);const unit=excelColIndex(h,['取得単位','単位数','単位','日病薬認定単位']);const code=excelColIndex(h,['項目コード','研修項目','項目','区分','カリキュラム']);const item=excelColIndex(h,['項目名','研修項目名','カリキュラム名']);if((date>=0||name>=0)&&unit>=0&&(code>=0||item>=0)){headerRow=r;cols={date,name,unit,code,item};break}}if(headerRow<0)continue;for(let r=headerRow+1;r<rows.length;r++){const row=rows[r]||[];if(!row.some(v=>String(v??'').trim()))continue;const date=cols.date>=0?excelDateToISO(row[cols.date],XLSX):'';const name=cols.name>=0?String(row[cols.name]??'').trim():'';const unit=cols.unit>=0?excelUnitValue(row[cols.unit]):0;const codeText=[cols.code>=0?row[cols.code]:'',cols.item>=0?row[cols.item]:''].filter(Boolean).join(' ');const code=curriculumCodeFromText(codeText)||curriculumCodeFromText(row.join(' '));if(!(unit>0)||(!date&&!name)||(!code&&!codeText))continue;out.push({date,name,credits:[{code,unit}],sourceSheet:sheetName,selected:true,_row:r+1})}}
   const grouped=[];const map=new Map();for(const x of out){const key=x.date&&x.name?`${x.date}\u0000${x.name}`:`__row__${grouped.length}`;if(map.has(key)){map.get(key).credits.push(...x.credits)}else{const c={...x,credits:[...x.credits]};grouped.push(c);map.set(key,c)}}return grouped}
 async function loadExcelSource(file){if(!file)return;excelLoading=true;excelError='';excelCandidates=[];excelFileName=file.name;render();try{const XLSX=await ensureXlsx();let workbook;if(/\.csv$/i.test(file.name)){const text=await file.text();workbook=XLSX.read(text,{type:'string',cellDates:true})}else{const buf=await file.arrayBuffer();workbook=XLSX.read(buf,{type:'array',cellDates:true})}excelCandidates=extractExcelCandidates(workbook,XLSX);if(!excelCandidates.length)excelError='取得日・研修名・単位・項目を読み取れる行が見つかりませんでした。';}catch(err){console.error('Excel取込エラー',err);excelError=(err?.message||'Excelファイルを読み取れませんでした。');excelCandidates=[];}finally{excelLoading=false;if(excelError)registerMode='conference';render({top:true})}}
-function addOrMergeImportedPlan(p){state.plans=state.plans||[];const name=normalizedTrainingName(p.name),existing=state.plans.find(x=>x.date===p.date&&normalizedTrainingName(x.name)===name);if(!existing){state.plans.push(normalizePlanRecord({...p,name}));return}const seen=new Set((existing.creditEntries||[]).map(e=>`${e.code}|${Number(e.unit||0)}`));for(const e of p.creditEntries||[]){const key=`${e.code}|${Number(e.unit||0)}`;if(!seen.has(key)){existing.creditEntries=existing.creditEntries||[];existing.creditEntries.push({...e,id:e.id||uid()});seen.add(key)}}if(!existing.conferenceId&&p.conferenceId)existing.conferenceId=p.conferenceId;if(!existing.source&&p.source)existing.source=p.source;existing.updatedAt=new Date().toISOString()}
-function registerExcelCandidates(){const selected=excelCandidates.filter(x=>x.selected);if(!selected.length)return;for(const c of selected){if(!c.date||!String(c.name||'').trim())return alert('日付または研修名が未入力の候補があります。');if(!(c.credits||[]).length||(c.credits||[]).some(cr=>!(Number(cr.unit)>0)))return alert('単位数を確認してください。')}let past=0,future=0;for(const c of selected){const entries=(c.credits||[]).map(cr=>({id:uid(),code:cr.code||'要確認',unit:Number(cr.unit||0),title:''}));if(c.date>todayISO()){addOrMergeImportedPlan({id:uid(),date:c.date,name:String(c.name).trim(),source:'excel',conferenceId:'',creditEntries:entries,memo:'Excelから取り込み',createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()});future++}else{addOrMergeTraining({id:uid(),date:c.date,name:String(c.name).trim(),source:'excel',cpc:false,hopessId:'',memo:'Excelから取り込み',files:[],creditEntries:entries});past++}}excelCandidates=[];excelFileName='';excelError='';saveData();registerMode='manual';currentView=future?'register':'history';if(!future)historyMode='matrix';render({top:true});if(future&&past)showUpdateToast(`取得記録 ${past}件・予定 ${future}件を取り込みました`);else if(future)showUpdateToast(`予定 ${future}件を取り込みました`);setTimeout(maybeApplyDeferredUpdate,0)}
+function addOrMergeImportedPlan(p){state.plans=state.plans||[];const name=normalizedTrainingName(p.name),existing=state.plans.find(x=>x.date===p.date&&normalizedTrainingName(x.name)===name);if(!existing){state.plans.push(normalizePlanRecord({...p,name}));return}const seen=new Set((existing.creditEntries||[]).map(e=>`${e.code}|${Number(e.unit||0)}`));for(const e of p.creditEntries||[]){const key=`${e.code}|${Number(e.unit||0)}`;if(!seen.has(key)){existing.creditEntries=existing.creditEntries||[];existing.creditEntries.push(normalizeCreditEntry({...e,id:e.id||uid()},existing));seen.add(key)}}if(!existing.conferenceId&&p.conferenceId)existing.conferenceId=p.conferenceId;if(!existing.source&&p.source)existing.source=p.source;existing.updatedAt=new Date().toISOString()}
+function registerExcelCandidates(){const selected=excelCandidates.filter(x=>x.selected);if(!selected.length)return;for(const c of selected){if(!c.date||!String(c.name||'').trim())return alert('日付または研修名が未入力の候補があります。');if(!(c.credits||[]).length||(c.credits||[]).some(cr=>!(Number(cr.unit)>0)))return alert('単位数を確認してください。')}let past=0,future=0;for(const c of selected){const entries=(c.credits||[]).map(cr=>({id:uid(),code:cr.code||'要確認',unit:Number(cr.unit||0),title:'',unitSystemId:cr.unitSystemId||'unknown'}));if(c.date>todayISO()){addOrMergeImportedPlan({id:uid(),date:c.date,name:String(c.name).trim(),source:'excel',conferenceId:'',creditEntries:entries,memo:'Excelから取り込み',createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()});future++}else{addOrMergeTraining({id:uid(),date:c.date,name:String(c.name).trim(),source:'excel',cpc:false,hopessId:'',memo:'Excelから取り込み',files:[],creditEntries:entries});past++}}excelCandidates=[];excelFileName='';excelError='';saveData();registerMode='manual';currentView=future?'register':'history';if(!future)historyMode='matrix';render({top:true});if(future&&past)showUpdateToast(`取得記録 ${past}件・予定 ${future}件を取り込みました`);else if(future)showUpdateToast(`予定 ${future}件を取り込みました`);setTimeout(maybeApplyDeferredUpdate,0)}
 
 
 function renderConferenceRegister(){const s=hospitalStats();if(!conferenceDraft)return `${renderSavedConferenceList()}<section class="card"><div class="section-title" style="margin-bottom:3px">学会プログラムから登録</div><label class="upload source-upload"><input type="file" accept="application/pdf,image/*" onchange="loadConferenceSource(this.files?.[0])"><strong>PDF・画像を選択</strong></label></section>`;
@@ -395,7 +413,8 @@ function renderAllocation(){
   const sim=simulateHospitalAllocation();
   const required=HOSPITAL_CERT.totalRequired;
   const rows=[...sim.all].sort((a,b)=>a.date.localeCompare(b.date)||(a.sourceOrder||0)-(b.sourceOrder||0)||a.name.localeCompare(b.name));
-  return `<section class="card allocation-overview"><div class="section-title">配分シミュレーション</div><div class="single-alloc-summary"><div class="primary"><span>病院薬学認定</span><strong>${fmt(sim.assignedUnits)} / ${fmt(required)}単位</strong></div><div><span>未割当</span><strong>${fmt(sim.unassignedUnits)}単位</strong></div></div></section><section class="card single-alloc-list"><div class="section-title">配分一覧</div>${rows.map(r=>{const assigned=sim.selectedSet.has(r.creditId);return `<div class="single-alloc-row"><div class="single-alloc-main"><strong>${esc(r.code)} ${esc(itemName(r.code))}　${fmt(r.unit)}単位</strong><span>${esc(r.date)}　${esc(r.name)}</span></div><span class="single-alloc-status ${assigned?'':'unassigned'}">${assigned?'病院薬学認定':'未割当'}</span></div>`}).join('')}</section>`
+  const detailRows=rows.length?rows.map(r=>{const assigned=sim.selectedSet.has(r.creditId);return `<div class="single-alloc-row"><div class="single-alloc-main"><strong>${esc(r.code)} ${esc(itemName(r.code))}　${fmt(r.unit)}単位</strong><span>${esc(r.date)}　${esc(r.name)}</span><span>単位制度：${esc(unitSystemLabel(r.unitSystemId))}</span></div><span class="single-alloc-status ${assigned?'':'unassigned'}">${assigned?'病院薬学認定':'未割当'}</span></div>`}).join(''):'<div class="small" style="padding:14px">配分対象の単位はまだありません。</div>';
+  return `<section class="card allocation-overview"><div class="section-title">配分シミュレーション</div><div class="single-alloc-summary"><div class="primary"><span>病院薬学認定</span><strong>${fmt(sim.assignedUnits)} / ${fmt(required)}単位</strong></div><div><span>未割当</span><strong>${fmt(sim.unassignedUnits)}単位</strong></div></div></section><section class="card single-alloc-list"><button class="requirements-toggle" onclick="allocationDetailsOpen=!allocationDetailsOpen;render()"><span>配分の内訳</span><span class="chev ${allocationDetailsOpen?'open':''}">${ICONS.chevron}</span></button>${allocationDetailsOpen?`<div style="border-top:1px solid var(--line)">${detailRows}</div>`:''}</section>`
 }
 
 function renderAllocRow(c){const confirmed=state.confirmedAllocations[c.creditId],manual=state.manualAllocations[c.creditId],a=allocationFor(c);return `<div class="alloc-row"><div class="row between"><div><div class="alloc-title">${c.code} ${fmt(c.unit)}単位 ・ ${esc(c.name)}</div><div class="alloc-meta">${c.date}${c.lectureTitle?` ・ ${esc(c.lectureTitle)}`:''}</div></div><span class="status ${confirmed?'confirmed':manual?'':'rec'}">${confirmed?'確定済み':manual?'手動配分':'おすすめ'}</span></div><div class="seg" style="margin-top:9px"><button class="${a===HOSPITAL_CERT.id?'on':''}" ${confirmed?'disabled':''} onclick="setAllocation('${c.creditId}','${HOSPITAL_CERT.id}')">病院薬学認定</button><button class="${a==='unassigned'?'on':''}" ${confirmed?'disabled':''} onclick="setAllocation('${c.creditId}','unassigned')">未割当</button></div></div>`}
@@ -453,7 +472,7 @@ function setRegisterMode(mode){registerMode=mode;if(mode==='manual'&&conferenceD
 
 function normalizedTrainingName(name=''){return String(name||'').trim().replace(/\s+/g,' ')}
 function addOrMergeTraining(t){const name=normalizedTrainingName(t.name);t.name=name;const existing=state.trainings.find(x=>x.date===t.date&&normalizedTrainingName(x.name)===name);if(!existing){state.trainings.push(t);return t.id}existing.creditEntries=[...(existing.creditEntries||[]),...(t.creditEntries||[])];if(!existing.conferenceId&&t.conferenceId)existing.conferenceId=t.conferenceId;if(t.files?.length){const names=new Set((existing.files||[]).map(f=>f.name));existing.files=[...(existing.files||[]),...t.files.filter(f=>!names.has(f.name))]}return existing.id}
-function addCredit(code,unit){regDraft.creditEntries.push({id:uid(),code,unit:Number(unit),title:''});render()}
+function addCredit(code,unit){regDraft.creditEntries.push({id:uid(),code,unit:Number(unit),title:'',unitSystemId:'jshp-hospital'});render()}
 function addCustomCredit(code){const raw=prompt(`${code} の単位数を入力してください`,'0.5');if(raw===null)return;const v=Number(raw);if(v>0)addCredit(code,v)}
 function removeCredit(id){regDraft.creditEntries=regDraft.creditEntries.filter(e=>e.id!==id);render()}
 function saveTraining(){if(!regDraft.date||!regDraft.name.trim())return alert('日付と研修名を入力してください。');const future=regDraft.date>todayISO();if(future){const now=new Date().toISOString(),payload={id:regDraft.planId||uid(),date:regDraft.date,name:regDraft.name.trim(),place:regDraft.place||'',url:regDraft.url||'',memo:regDraft.memo||'',source:regDraft.source||'manual-plan',conferenceId:regDraft.conferenceId||manualSourceConferenceId||'',creditEntries:(regDraft.creditEntries||[]).map(e=>({...e,id:e.id||uid()})),createdAt:now,updatedAt:now};if(regDraft.planId){state.plans=(state.plans||[]).map(p=>p.id===regDraft.planId?normalizePlanRecord({...p,...payload,createdAt:p.createdAt||now}):p)}else addOrMergeImportedPlan(payload);saveData();editingPlanId=null;manualSourceConferenceId=null;regDraft=freshDraft();render({top:true});showUpdateToast('予定として保存しました');return}if(!regDraft.creditEntries.length)return alert('取得単位を1件以上追加してください。');const t={...regDraft,id:editingId||uid(),name:regDraft.name.trim(),conferenceId:regDraft.conferenceId||manualSourceConferenceId||''};if(manualSourceConferenceId&&!t.files?.length){const c=state.conferences.find(x=>x.id===manualSourceConferenceId)||conferenceDraft;if(c?.fileName)t.files=[{name:c.fileName}]}if(editingId){const old=state.trainings.find(x=>x.id===editingId);const keep=new Set((t.creditEntries||[]).map(e=>e.id));for(const e of old?.creditEntries||[]){if(!keep.has(e.id)){const key=`${editingId}:${e.id}`;delete state.confirmedAllocations[key];delete state.manualAllocations[key]}}state.trainings=state.trainings.map(x=>x.id===editingId?t:x)}else addOrMergeTraining(t);if(t.planId)state.plans=(state.plans||[]).filter(p=>p.id!==t.planId);saveData();editingId=null;editingPlanId=null;creditSelectMode=false;selectedCreditEntryIds.clear();manualSourceConferenceId=null;regDraft=freshDraft();historyMode='matrix';currentView='history';render({top:true});setTimeout(maybeApplyDeferredUpdate,0)}
@@ -866,10 +885,13 @@ function parseConferenceLines(lines){
   const sessions=[];let order=0;
   let activePage=null;
   let sectionDefaultUnit=null;
+  let sectionUnitSystemId='';
   for(let i=0;i<lines.length;i++){
     const line=lines[i];
-    if(activePage!==line.page){activePage=line.page;sectionDefaultUnit=null}
+    if(activePage!==line.page){activePage=line.page;sectionDefaultUnit=null;sectionUnitSystemId=''}
 
+    const explicitUnitSystemId=unitSystemIdFromText(line.text);
+    if(explicitUnitSystemId)sectionUnitSystemId=explicitUnitSystemId;
     const headingDefault=sectionDefaultUnitFromText(line.text);
     if(looksLikeConferenceSectionHeading(line.text))sectionDefaultUnit=headingDefault;
     else if(headingDefault!==null)sectionDefaultUnit=headingDefault;
@@ -892,6 +914,8 @@ function parseConferenceLines(lines){
     if(sectionDefaultUnit!==null&&credits.some(c=>!(Number(c.unit)>0))){
       credits=credits.map(c=>({...c,unit:Number(c.unit)>0?c.unit:sectionDefaultUnit}));
     }
+    const unitSystemId=explicitUnitSystemId||sectionUnitSystemId||'unknown';
+    credits=credits.map(c=>({...c,unitSystemId:c.unitSystemId||unitSystemId}));
 
     const title=inferPdfSessionTitle(lines,i,line.text);
     order++;
@@ -928,7 +952,7 @@ function parseConferenceLines(lines){
 function cycleConferenceStatus(i,status){const x=conferenceDraft.sessions[i];if(x.registeredAt)return;x.status=x.status===status?'undecided':status;upsertConferenceDraft();render()}
 function editConferenceSession(i){editConferenceIndex=i;render()}
 function closeConferenceEdit(e){if(e&&e.target!==e.currentTarget)return;editConferenceIndex=null;render()}
-function saveConferenceEdit(){const code=document.getElementById('confEditCode').value,unit=Number(document.getElementById('confEditUnit').value);if(!(unit>0))return alert('単位数を入力してください。');const x=conferenceDraft.sessions[editConferenceIndex];if(x.registeredAt)return alert('登録済みの講演は履歴から編集してください。');if(!x.credits?.length)x.credits=[{code,unit}];else x.credits[0]={...x.credits[0],code,unit};editConferenceIndex=null;upsertConferenceDraft();render()}
+function saveConferenceEdit(){const code=document.getElementById('confEditCode').value,unit=Number(document.getElementById('confEditUnit').value);if(!(unit>0))return alert('単位数を入力してください。');const x=conferenceDraft.sessions[editConferenceIndex];if(x.registeredAt)return alert('登録済みの講演は履歴から編集してください。');if(!x.credits?.length)x.credits=[{code,unit,unitSystemId:'unknown'}];else x.credits[0]={...x.credits[0],code,unit,unitSystemId:x.credits[0].unitSystemId||'unknown'};editConferenceIndex=null;upsertConferenceDraft();render()}
 function saveConferenceAsPlan(){if(!conferenceDraft||!conferenceDraft.date||!conferenceDraft.name)return;upsertConferenceDraft();addOrMergeImportedPlan({id:uid(),date:conferenceDraft.date,name:conferenceDraft.name,source:'conference',conferenceId:conferenceDraft.id,creditEntries:[],memo:'資料から取り込み',createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()});saveData();conferenceDraft=null;manualSourceConferenceId=null;releaseSelectedSource();registerMode='manual';currentView='register';render({top:true});showUpdateToast('予定に保存しました')}
 function saveConferenceTraining(){
   const attended=conferenceDraft.sessions.filter(x=>x.status==='attended'&&!x.registeredAt);
@@ -936,7 +960,7 @@ function saveConferenceTraining(){
   const unresolved=attended.some(x=>!(x.credits||[]).length||(x.credits||[]).some(c=>!c.code||!(Number(c.unit)>0)));
   if(unresolved&&!confirm('単位区分が「要確認」の講演があります。このまま登録しますか？'))return;
   const entries=[];
-  attended.forEach(s=>(s.credits||[]).forEach(c=>entries.push({id:uid(),code:c.code||'要確認',unit:Number(c.unit||0),title:s.title,sourceOrder:s.sourceOrder,sourcePage:s.page})));
+  attended.forEach(s=>(s.credits||[]).forEach(c=>entries.push({id:uid(),code:c.code||'要確認',unit:Number(c.unit||0),title:s.title,unitSystemId:c.unitSystemId||'unknown',sourceOrder:s.sourceOrder,sourcePage:s.page})));
   const conferenceId=conferenceDraft.id;
   const trainingId=addOrMergeTraining({id:uid(),date:conferenceDraft.date,name:conferenceDraft.name,conferenceId,source:'jshp',cpc:false,hopessId:'',memo:'学会プログラムから一括登録',files:conferenceDraft.fileName?[{name:conferenceDraft.fileName}]:[],creditEntries:entries});
   const now=new Date().toISOString();
@@ -1009,28 +1033,19 @@ async function forceAppUpdate(targetVersion=updateAvailableVersion,automatic=fal
 }
 function maybeApplyDeferredUpdate(){if(updateAvailableVersion&&!hasUnsafeUnsavedInput())forceAppUpdate(updateAvailableVersion,true)}
 function scheduleForegroundUpdateCheck(){setTimeout(()=>checkForAppUpdate({auto:true}),250)}
-// preview: foreground update check disabled
-// preview
-// preview
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')scheduleForegroundUpdateCheck()});
+window.addEventListener('pageshow',scheduleForegroundUpdateCheck);
+window.addEventListener('focus',scheduleForegroundUpdateCheck);
 
 async function bootstrap(){
-  state=migrateData(defaultData());
-  state.trainings=[
-    {id:'pv1',date:'2026-07-09',name:'都病薬新人研修',source:'jshp',cpc:false,creditEntries:[{id:'p1',code:'I-1',unit:.5,title:''},{id:'p2',code:'I-2',unit:.5,title:''},{id:'p3',code:'II-1',unit:.5,title:''},{id:'p4',code:'II-2',unit:.5,title:''},{id:'p5',code:'II-3',unit:.5,title:''}]},
-    {id:'pv2',date:'2026-07-12',name:'日病薬新人研修',source:'jshp',cpc:false,creditEntries:[{id:'p6',code:'I-1',unit:1,title:''},{id:'p7',code:'I-3',unit:.5,title:''},{id:'p8',code:'III-1',unit:1,title:''}]},
-    {id:'pv3',date:'2026-08-08',name:'第9回日本病院薬剤師会研修 A',source:'jshp',cpc:false,creditEntries:[{id:'p9',code:'I-1',unit:.5,title:''},{id:'p10',code:'I-2',unit:.5,title:''},{id:'p11',code:'II-3',unit:1,title:''}]},
-    {id:'pv4',date:'2026-08-08',name:'第9回日本病院薬剤師会研修 B',source:'jshp',cpc:false,creditEntries:[{id:'p12',code:'I-1',unit:.5,title:''},{id:'p13',code:'I-2',unit:.5,title:''},{id:'p14',code:'II-3',unit:1,title:''}]}
-  ];
-  state.plans=[
-    {id:'plan1',date:'2026-09-12',name:'○○薬学会',place:'名古屋国際会議場',url:'',memo:'',source:'excel',conferenceId:'',creditEntries:[{id:'pc1',code:'III-1',unit:1,title:''},{id:'pc2',code:'V-2',unit:1,title:''}],createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()},
-    {id:'plan2',date:'2026-10-04',name:'院内研修',place:'',url:'',memo:'開始時間を後で確認',createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()}
-  ];
+  try{state=await loadData()}catch(err){console.error(err);state=migrateData(defaultData());storageBackend='localStorage'}
+  currentView='home';
   regDraft=freshDraft();
   planDraft=freshPlanDraft();
   const notice=localStorage.getItem('pharm-cert-update-notice');
   if(notice===APP_VERSION){localStorage.removeItem('pharm-cert-update-notice');setTimeout(()=>showUpdateToast(`v${APP_VERSION}に更新しました`),80)}
   render();
   if('serviceWorker' in navigator)navigator.serviceWorker.ready.then(reg=>reg.update()).catch(()=>{});
-  // preview: automatic update check disabled
+  checkForAppUpdate({auto:true,force:true});
 }
 bootstrap();

@@ -1,5 +1,5 @@
-const APP_VERSION='1.19.0';
-const SCHEMA_VERSION=11;
+const APP_VERSION='1.19.1';
+const SCHEMA_VERSION=12;
 const LEGACY_STORAGE_KEY='pharm-cert-pwa-data';
 const DB_NAME='pharm-cert-pwa';
 const DB_VERSION=2;
@@ -109,6 +109,12 @@ function normalizePlanRecord(p){const base={id:p?.id||uid(),date:p?.date||todayI
 function normalizeConferenceRecord(c){const x={...c};x.id=x.id||uid();x.sourceId=x.sourceId||'';x.sourceType=x.sourceType||'';x.fileName=x.fileName||'';x.name=x.name||x.fileName||'学会プログラム';x.date=x.date||todayISO();x.sessions=(x.sessions||[]).map((s,i)=>({...s,sourceOrder:s.sourceOrder||i+1,status:s.status==='skipped'?'undecided':(s.status||'undecided'),credits:(s.credits||[]).map(v=>({...v,unit:Number(v.unit||0),unitSystemId:v.unitSystemId||'unknown'}))}));x.analysisPending=false;x.createdAt=x.createdAt||new Date().toISOString();x.updatedAt=x.updatedAt||x.createdAt;return x}
 function migrateData(raw){
   let d=raw&&typeof raw==='object'?JSON.parse(JSON.stringify(raw)):defaultData();
+  // Remove only the hard-coded preview/sample records accidentally shipped in v1.18.
+  // User-created records use UUID-like ids, so existing real data is preserved.
+  const previewTrainingIds=new Set(['pv1','pv2','pv3','pv4']);
+  const previewPlanIds=new Set(['plan1','plan2']);
+  d.trainings=(d.trainings||[]).filter(t=>!previewTrainingIds.has(String(t?.id||'')));
+  d.plans=(d.plans||[]).filter(p=>!previewPlanIds.has(String(p?.id||'')));
   d.settings={hopess:false,dark:false,theme:'burgundy',practiceStartDate:'',selectedQualificationId:'jshp-hospital',qualificationPlans:{'jshp-hospital':{startFiscalYear:2026}},...(d.settings||{})};
   d.settings.qualificationPlans={'jshp-hospital':{startFiscalYear:2026},...(d.settings.qualificationPlans||{})};
   d.qualifications=d.qualifications?.length?d.qualifications:[HOSPITAL_CERT];

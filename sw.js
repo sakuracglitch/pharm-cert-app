@@ -1,5 +1,5 @@
-const CACHE='pharm-cert-v1.19.1';
-const ASSETS=['./','./index.html','./styles.css?v=1.19.1','./app.js?v=1.19.1','./manifest.webmanifest','./icon-192.png','./icon-512.png','./version.json'];
+const CACHE='pharm-cert-v1.19.2';
+const ASSETS=['./','./index.html','./styles.css?v=1.19.2','./app.js?v=1.19.2','./manifest.webmanifest','./icon-192.png','./icon-512.png','./version.json'];
 self.addEventListener('install',event=>{self.skipWaiting();event.waitUntil(caches.open(CACHE).then(cache=>cache.addAll(ASSETS)))});
 self.addEventListener('activate',event=>{event.waitUntil(Promise.all([caches.keys().then(keys=>Promise.all(keys.filter(key=>key!==CACHE).map(key=>caches.delete(key)))),self.clients.claim()]))});
 self.addEventListener('message',event=>{if(event.data?.type==='SKIP_WAITING')self.skipWaiting()});

@@ -1,5 +1,5 @@
-const APP_VERSION='1.19.1';
-const SCHEMA_VERSION=12;
+const APP_VERSION='1.19.2';
+const SCHEMA_VERSION=13;
 const LEGACY_STORAGE_KEY='pharm-cert-pwa-data';
 const DB_NAME='pharm-cert-pwa';
 const DB_VERSION=2;
@@ -107,14 +107,38 @@ function requirementLabel(k){return ({credits:'単位',experience:'実務経験'
 function normalizeTraining(t){if(Array.isArray(t.creditEntries))return {...t,creditEntries:t.creditEntries.map(e=>normalizeCreditEntry(e,t))};return {...t,creditEntries:Object.entries(t.credits||{}).map(([code,unit])=>normalizeCreditEntry({id:uid(),code,unit:Number(unit),title:''},t))}}
 function normalizePlanRecord(p){const base={id:p?.id||uid(),date:p?.date||todayISO(),name:String(p?.name||'').trim(),place:String(p?.place||''),url:String(p?.url||''),memo:String(p?.memo||''),source:String(p?.source||''),conferenceId:String(p?.conferenceId||''),createdAt:p?.createdAt||new Date().toISOString(),updatedAt:p?.updatedAt||p?.createdAt||new Date().toISOString()};return {...base,creditEntries:(p?.creditEntries||[]).map(e=>normalizeCreditEntry(e,p))}}
 function normalizeConferenceRecord(c){const x={...c};x.id=x.id||uid();x.sourceId=x.sourceId||'';x.sourceType=x.sourceType||'';x.fileName=x.fileName||'';x.name=x.name||x.fileName||'学会プログラム';x.date=x.date||todayISO();x.sessions=(x.sessions||[]).map((s,i)=>({...s,sourceOrder:s.sourceOrder||i+1,status:s.status==='skipped'?'undecided':(s.status||'undecided'),credits:(s.credits||[]).map(v=>({...v,unit:Number(v.unit||0),unitSystemId:v.unitSystemId||'unknown'}))}));x.analysisPending=false;x.createdAt=x.createdAt||new Date().toISOString();x.updatedAt=x.updatedAt||x.createdAt;return x}
+const PREVIEW_SAMPLE_TRAININGS={
+  pv1:{date:'2026-07-09',name:'都病薬新人研修',credits:[['p1','I-1',.5,''],['p2','I-2',.5,''],['p3','II-1',.5,''],['p4','II-2',.5,''],['p5','II-3',.5,'']]},
+  pv2:{date:'2026-07-12',name:'日病薬新人研修',credits:[['p6','I-1',1,''],['p7','I-3',.5,''],['p8','III-1',1,'']]},
+  pv3:{date:'2026-08-08',name:'第9回日本病院薬剤師会研修 A',credits:[['p9','I-1',.5,''],['p10','I-2',.5,''],['p11','II-3',1,'']]},
+  pv4:{date:'2026-08-08',name:'第9回日本病院薬剤師会研修 B',credits:[['p12','I-1',.5,''],['p13','I-2',.5,''],['p14','II-3',1,'']]}
+};
+const PREVIEW_SAMPLE_PLANS={
+  plan1:{date:'2026-09-12',name:'○○薬学会',place:'名古屋国際会議場',url:'',memo:'',source:'excel',credits:[['pc1','III-1',1,''],['pc2','V-2',1,'']]},
+  plan2:{date:'2026-10-04',name:'院内研修',place:'',url:'',memo:'開始時間を後で確認',source:'',credits:[]}
+};
+function sampleCreditsMatch(entries=[],credits=[]){
+  if(entries.length!==credits.length)return false;
+  return credits.every((v,i)=>{const e=entries[i]||{};return String(e.id||'')===v[0]&&String(e.code||'')===v[1]&&Math.abs(Number(e.unit||0)-Number(v[2]))<1e-9&&String(e.title||'')===v[3]&&!e.sourceOrder&&!e.sourcePage});
+}
+function isExactPreviewTraining(t){
+  const x=PREVIEW_SAMPLE_TRAININGS[String(t?.id||'')];if(!x)return false;
+  return String(t.date||'')===x.date&&String(t.name||'')===x.name&&String(t.source||'')==='jshp'&&!t.cpc&&!String(t.hopessId||'')&&!String(t.memo||'')&&!String(t.conferenceId||'')&&!(t.files||[]).length&&sampleCreditsMatch(t.creditEntries||[],x.credits);
+}
+function isExactPreviewPlan(p){
+  const x=PREVIEW_SAMPLE_PLANS[String(p?.id||'')];if(!x)return false;
+  return String(p.date||'')===x.date&&String(p.name||'')===x.name&&String(p.place||'')===x.place&&String(p.url||'')===x.url&&String(p.memo||'')===x.memo&&String(p.source||'')===x.source&&!String(p.conferenceId||'')&&sampleCreditsMatch(p.creditEntries||[],x.credits);
+}
+function creditContentKey(entries=[]){return entries.map(e=>`${String(e.code||'')}|${Number(e.unit||0)}|${String(e.title||'')}`).join(';;')}
+function sameTrainingContent(a,b){return String(a?.date||'')===String(b?.date||'')&&String(a?.name||'')===String(b?.name||'')&&Boolean(a?.cpc)===Boolean(b?.cpc)&&String(a?.memo||'')===String(b?.memo||'')&&creditContentKey(a?.creditEntries||[])===creditContentKey(b?.creditEntries||[])}
+function samePlanContent(a,b){return String(a?.date||'')===String(b?.date||'')&&String(a?.name||'')===String(b?.name||'')&&String(a?.place||'')===String(b?.place||'')&&String(a?.url||'')===String(b?.url||'')&&String(a?.memo||'')===String(b?.memo||'')&&creditContentKey(a?.creditEntries||[])===creditContentKey(b?.creditEntries||[])}
+
 function migrateData(raw){
   let d=raw&&typeof raw==='object'?JSON.parse(JSON.stringify(raw)):defaultData();
-  // Remove only the hard-coded preview/sample records accidentally shipped in v1.18.
-  // User-created records use UUID-like ids, so existing real data is preserved.
-  const previewTrainingIds=new Set(['pv1','pv2','pv3','pv4']);
-  const previewPlanIds=new Set(['plan1','plan2']);
-  d.trainings=(d.trainings||[]).filter(t=>!previewTrainingIds.has(String(t?.id||'')));
-  d.plans=(d.plans||[]).filter(p=>!previewPlanIds.has(String(p?.id||'')));
+  // Preview records are removed only when their full original content still matches.
+  // If a user edited one of those records, its old preview id alone must never cause deletion.
+  d.trainings=(d.trainings||[]).filter(t=>!isExactPreviewTraining(t));
+  d.plans=(d.plans||[]).filter(p=>!isExactPreviewPlan(p));
   d.settings={hopess:false,dark:false,theme:'burgundy',practiceStartDate:'',selectedQualificationId:'jshp-hospital',qualificationPlans:{'jshp-hospital':{startFiscalYear:2026}},...(d.settings||{})};
   d.settings.qualificationPlans={'jshp-hospital':{startFiscalYear:2026},...(d.settings.qualificationPlans||{})};
   d.qualifications=d.qualifications?.length?d.qualifications:[HOSPITAL_CERT];
@@ -148,6 +172,48 @@ async function idbSet(key,value){
   try{return await new Promise((resolve,reject)=>{const tx=db.transaction(DB_STORE,'readwrite');tx.objectStore(DB_STORE).put(value,key);tx.oncomplete=()=>resolve();tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error||new Error('IndexedDB write aborted'))})}
   finally{db.close()}
 }
+async function idbKeys(){
+  const db=await openAppDB();
+  try{return await new Promise((resolve,reject)=>{const tx=db.transaction(DB_STORE,'readonly');const req=tx.objectStore(DB_STORE).getAllKeys();req.onsuccess=()=>resolve(req.result||[]);req.onerror=()=>reject(req.error)})}
+  finally{db.close()}
+}
+const RECOVERY_1192_MARKER='recovery-v1.19.2-complete';
+async function recoverRecordsDeletedBy1191(raw){
+  if(storageBackend!=='indexeddb'||!raw)return {data:raw,checked:false,restoredTrainingIds:[]};
+  try{if(await idbGet(RECOVERY_1192_MARKER))return {data:raw,checked:false,restoredTrainingIds:[]}}catch{}
+  let keys=[];
+  try{keys=(await idbKeys()).map(String)}catch{return {data:raw,checked:false,restoredTrainingIds:[]}}
+  const schema11=keys.filter(k=>k.startsWith('migration-backup-schema-11-')).sort((a,b)=>Number(b.split('-').pop()||0)-Number(a.split('-').pop()||0));
+  if(!schema11.length)return {data:raw,checked:true,restoredTrainingIds:[]};
+  let backup=null;
+  try{backup=await idbGet(schema11[0])}catch{}
+  if(!backup||typeof backup!=='object')return {data:raw,checked:true,restoredTrainingIds:[]};
+  const out=JSON.parse(JSON.stringify(raw));
+  out.trainings=out.trainings||[];out.plans=out.plans||[];
+  const restoredTrainingIds=[];
+  for(const t of backup.trainings||[]){
+    if(!PREVIEW_SAMPLE_TRAININGS[String(t?.id||'')]||isExactPreviewTraining(t))continue;
+    if(out.trainings.some(x=>String(x?.id||'')===String(t.id)||sameTrainingContent(x,t)))continue;
+    out.trainings.push(t);restoredTrainingIds.push(String(t.id));
+  }
+  for(const p of backup.plans||[]){
+    if(!PREVIEW_SAMPLE_PLANS[String(p?.id||'')]||isExactPreviewPlan(p))continue;
+    if(out.plans.some(x=>String(x?.id||'')===String(p.id)||samePlanContent(x,p)))continue;
+    out.plans.push(p);
+  }
+  if(restoredTrainingIds.length){
+    out.confirmedAllocations=out.confirmedAllocations||{};out.manualAllocations=out.manualAllocations||{};
+    for(const id of restoredTrainingIds){
+      const t=(backup.trainings||[]).find(x=>String(x?.id||'')===id);
+      for(const e of t?.creditEntries||[]){
+        const key=`${id}:${e.id}`;
+        if(out.confirmedAllocations[key]===undefined&&backup.confirmedAllocations?.[key]!==undefined)out.confirmedAllocations[key]=backup.confirmedAllocations[key];
+        if(out.manualAllocations[key]===undefined&&backup.manualAllocations?.[key]!==undefined)out.manualAllocations[key]=backup.manualAllocations[key];
+      }
+    }
+  }
+  return {data:out,checked:true,restoredTrainingIds};
+}
 async function idbFileSet(key,value){const db=await openAppDB();try{return await new Promise((resolve,reject)=>{const tx=db.transaction(DB_FILE_STORE,'readwrite');tx.objectStore(DB_FILE_STORE).put(value,key);tx.oncomplete=()=>resolve();tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error||new Error('IndexedDB file write aborted'))})}finally{db.close()}}
 async function idbFileGet(key){const db=await openAppDB();try{return await new Promise((resolve,reject)=>{const tx=db.transaction(DB_FILE_STORE,'readonly');const req=tx.objectStore(DB_FILE_STORE).get(key);req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error)})}finally{db.close()}}
 async function idbFileDelete(key){const db=await openAppDB();try{return await new Promise((resolve,reject)=>{const tx=db.transaction(DB_FILE_STORE,'readwrite');tx.objectStore(DB_FILE_STORE).delete(key);tx.oncomplete=()=>resolve();tx.onerror=()=>reject(tx.error)})}finally{db.close()}}
@@ -166,8 +232,10 @@ async function loadData(){
   if(raw&&originalSchema<SCHEMA_VERSION&&storageBackend==='indexeddb'){
     try{await idbSet(`migration-backup-schema-${originalSchema}-${Date.now()}`,raw)}catch{}
   }
-  const migrated=migrateData(raw||defaultData());
+  const recovery=await recoverRecordsDeletedBy1191(raw);
+  const migrated=migrateData(recovery.data||defaultData());
   await persistData(migrated);
+  if(storageBackend==='indexeddb'&&recovery.checked){try{await idbSet(RECOVERY_1192_MARKER,{completedAt:new Date().toISOString(),restoredTrainingIds:recovery.restoredTrainingIds||[]})}catch{}}
   return migrated;
 }
 async function persistData(snapshot){

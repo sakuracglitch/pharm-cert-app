@@ -471,3 +471,6 @@ html[data-palette="teal"] body.darkmode .seg button.on{border-color:#31504d}
   .preview-req-row>small{grid-column:2;text-align:left}
 }
 
+
+/* v1.20: 領域（カリキュラム）なし */
+.no-curriculum-domain summary>span:first-child{display:grid;gap:2px}.no-curriculum-domain summary small{font-size:10px;color:var(--muted);font-weight:500}.no-curriculum-row{padding-top:9px}.no-curriculum-row .item-name{font-weight:700}
